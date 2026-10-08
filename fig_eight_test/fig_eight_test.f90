@@ -2,7 +2,7 @@ PROGRAM fig_eight
   IMPLICIT NONE
   INTEGER :: n, i, j, k, ndims
   INTEGER, ALLOCATABLE, DIMENSION(:) :: IDs
-  DOUBLE PRECISION :: t, G, pi, dt, twrite, tcount, tlim, E0, E, Eerr, Ek, Ep, vmagsqrd, dist, vdotr, eta, amagsqrd
+  DOUBLE PRECISION :: t, G, pi, dt, dtsqrd, dt3, dt4, dt5, twrite, tcount, tlim, E0, E, Eerr, Ek, Ep, vmagsqrd, vdotr, eta, amagsqrd, dist, distsqrd, dist3, dist5
   DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt
   DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: r, v, a, jrk, s, c, apred, jrkpred
 
@@ -32,6 +32,10 @@ PROGRAM fig_eight
   twrite = 0.01
   tlim = 100.
   dt = 0. ! Timestep length will be made non-zero before the first time the end-of-timestep positions/velocities are predicted (i.e. before snap/crackle are calculated)
+  dtsqrd = 0.
+  dt3 = 0.
+  dt4 = 0.
+  dt5 = 0.
   dtOpt = 0.
   eta = 1e-10
   G = 1.
@@ -52,6 +56,9 @@ PROGRAM fig_eight
   vmagsqrd = 0.
   amagsqrd = 0.
   dist = 0.
+  distsqrd = 0.
+  dist3 = 0.
+  dist5 = 0.
   dr = 0.
   dv = 0.
   vdotr = 0.
@@ -87,11 +94,11 @@ PROGRAM fig_eight
   DO i=1,n-1
      ! Potential Energy
      DO j=i+1,n
-        dist = 0.
+        distsqrd = 0.
         DO k=1,ndims
-           dist = dist + ((r(k,i)-r(k,j))**2) ! Will take square root AFTER this DO loop
+           distsqrd = distsqrd + ((r(k,i)-r(k,j))**2) ! Will take square root AFTER this DO loop
         END DO
-        dist = dist**0.5 ! dist is now the magnitude of the distance between objects i and j
+        dist = SQRT(distsqrd) ! dist is now the magnitude of the distance between objects i and j
         Ep = Ep - (G * m(i) * m(j) / dist)
      END DO
   END DO
@@ -115,49 +122,57 @@ PROGRAM fig_eight
         amagsqrd = 0.
         DO j=1,n
            IF (i==j) CYCLE
-           dist = 0.
+           distsqrd = 0.
            vdotr = 0.
            DO k=1,ndims
               dr(k) = r(k,i) - r(k,j)
               dv(k) = v(k,i) - v(k,j)
               vdotr = vdotr + (dv(k) * dr(k))
-              dist = dist + (dr(k)**2)
+              distsqrd = distsqrd + (dr(k)**2)
            END DO
-           dist = dist**0.5
+           dist = SQRT(distsqrd)
+           dist3 = dist**3
+           dist5 = dist**5
            DO k=1,ndims
-              a(k,i) = a(k,i) - (G * m(j) * dr(k) / (dist**3))
+              a(k,i) = a(k,i) - (G * m(j) * dr(k) / (dist3))
               amagsqrd = amagsqrd + (a(k,i)**2)
-              jrk(k,i) = jrk(k,i) + (G * m(j) * ((dv(k)/(dist**3)) - (3.*vdotr*dr(k)/(dist**5))))
+              jrk(k,i) = jrk(k,i) + (G * m(j) * ((dv(k)/(dist3)) - (3.*vdotr*dr(k)/(dist5))))
            END DO
         END DO
         dtOpt(i) = ((eta/amagsqrd)**0.5)
      END DO
 
      dt = MINVAL(dtOpt(:)) ! Adaptive timestep length
+     dtsqrd = dt**2
+     dt3 = dt**3
+     dt4 = dt**4
+     dt5 = dt**5
 
      DO i=1,n
         ! Position/velocity predictions. Separate DO loop to the acceleration/jerk calculations because those calculations will not give the correct results if any positions/velocities
         ! change during them
-        r(:,i) = r(:,i) + (v(:,i) * dt) + (a(:,i) * (dt**2) / 2.) + (jrk(:,i) * (dt**3) / 6.)
-        v(:,i) = v(:,i) + (a(:,i) * dt) + (jrk(:,i) * (dt**2) / 2.)
+        r(:,i) = r(:,i) + (v(:,i) * dt) + (a(:,i) * (dtsqrd) / 2.) + (jrk(:,i) * (dt3) / 6.)
+        v(:,i) = v(:,i) + (a(:,i) * dt) + (jrk(:,i) * (dtsqrd) / 2.)
      END DO
 
      DO i=1,n
         ! Predicted accelerations/jerks at predicted positions/velocities
         DO j=1,n
            IF (i==j) CYCLE
-           dist = 0.
+           distsqrd = 0.
            vdotr = 0.
            DO k=1,ndims
               dr(k) = r(k,i) - r(k,j)
               dv(k) = v(k,i) - v(k,j)
               vdotr = vdotr + (dv(k) * dr(k))
-              dist = dist + (dr(k)**2)
+              distsqrd = distsqrd + (dr(k)**2)
            END DO
-           dist = dist**0.5
+           dist = SQRT(distsqrd)
+           dist3 = dist**3
+           dist5 = dist**5
            DO k=1,ndims
-              apred(k,i) = apred(k,i) - (G * m(j) * dr(k) / (dist**3))
-              jrkpred(k,i) = jrkpred(k,i) + (G * m(j) * ((dv(k)/(dist**3)) - (3.*vdotr*dr(k)/(dist**5))))
+              apred(k,i) = apred(k,i) - (G * m(j) * dr(k) / (dist3))
+              jrkpred(k,i) = jrkpred(k,i) + (G * m(j) * ((dv(k)/(dist3)) - (3.*vdotr*dr(k)/(dist5))))
            END DO
         END DO
      END DO
@@ -167,9 +182,9 @@ PROGRAM fig_eight
         DO j=1,n
            IF (i==j) CYCLE
            DO k=1,ndims
-              s(k,i) = s(k,i) - (((6.*(a(k,j)-apred(k,j))) + (((4.*jrk(k,j))+(2.*jrkpred(k,j)))*dt)) / (dt**2)) ! The subtraction is outside the brackets so the jerk contribution inside the brackets here
-                                                                                                                ! is an addition rather than a subtraction (and similarly for the acceleration contribution)
-              c(k,i) = c(k,i) + (((12.*(a(k,j)-apred(k,j))) + (6.*(jrk(k,j)+jrkpred(k,j))*dt)) / (dt**3))
+              s(k,i) = s(k,i) - (((6.*(a(k,j)-apred(k,j))) + (((4.*jrk(k,j))+(2.*jrkpred(k,j)))*dt)) / (dtsqrd)) ! The subtraction is outside the brackets so the jerk contribution inside the brackets here
+                                                                                                               ! is an addition rather than a subtraction (and similarly for the acceleration contribution)
+              c(k,i) = c(k,i) + (((12.*(a(k,j)-apred(k,j))) + (6.*(jrk(k,j)+jrkpred(k,j))*dt)) / (dt3))
            END DO
         END DO
      END DO
@@ -179,8 +194,8 @@ PROGRAM fig_eight
         ! at the end of the previous DO loop instead (after cycling through all j's for a given i), but I have separated them to make the code easier to read
 
         ! Note that the end-of-timestep positions/velocities were calculated to second order for the predictions earlier, and so only the snap and crackle contributions need to be considered here
-        r(:,i) = r(:,i) + ((s(:,i)*(dt**4))/24.) + ((c(:,i)*(dt**5))/120.)
-        v(:,i) = v(:,i) + ((s(:,i)*(dt**3))/6.) + ((c(:,i)*(dt**4))/24.)
+        r(:,i) = r(:,i) + ((s(:,i)*(dt4))/24.) + ((c(:,i)*(dt5))/120.)
+        v(:,i) = v(:,i) + ((s(:,i)*(dt3))/6.) + ((c(:,i)*(dt4))/24.)
      END DO
 
      t = t + dt
@@ -199,11 +214,11 @@ PROGRAM fig_eight
      DO i=1,n-1
         ! Potential Energy
         DO j=i+1,n
-           dist = 0.
+           distsqrd = 0.
            DO k=1,ndims
-              dist = dist + ((r(k,i)-r(k,j))**2)
+              distsqrd = distsqrd + ((r(k,i)-r(k,j))**2)
            END DO
-           dist = dist**0.5
+           dist = SQRT(distsqrd)
            Ep = Ep - (G * m(i) * m(j) / dist)
         END DO
      END DO
