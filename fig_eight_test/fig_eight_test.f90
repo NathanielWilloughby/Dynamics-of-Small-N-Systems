@@ -139,7 +139,7 @@ PROGRAM fig_eight
               jrk(k,i) = jrk(k,i) + (G * m(j) * ((dv(k)/(dist3)) - (3.*vdotr*dr(k)/(dist5))))
            END DO
         END DO
-        dtOpt(i) = ((eta/amagsqrd)**0.5)
+        dtOpt(i) = SQRT(eta/amagsqrd)
      END DO
 
      dt = MINVAL(dtOpt(:)) ! Adaptive timestep length
