@@ -3,13 +3,20 @@ PROGRAM solar_system
   INTEGER :: n, i, j, k, ndims
   INTEGER, ALLOCATABLE, DIMENSION(:) :: IDs
   DOUBLE PRECISION :: t, G, pi, dt, dtsqrd, dt3, dt4, dt5, twrite, tcount, tlim, E0, E, Eerr, Ek, Ep, vmagsqrd, dist, distsqrd, dist3, dist5, vdotr, eta, amagsqrd
-  DOUBLE PRECISION :: Greal, Mreal, Lreal, Vreal, Treal
+  DOUBLE PRECISION :: Greal, Mreal, Lreal, Vreal, Treal, year
   DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt
   DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: r, v, a, jrk, s, c, apred, jrkpred
 
-  OPEN(7, file='xpositions.txt', status='replace')
-  OPEN(8, file='ypositions.txt', status='replace')
-  OPEN(9, file='energy_error.txt', status='replace')
+  OPEN(7, file='sun_data.txt', status='replace')
+  OPEN(8, file='mercury_data.txt', status='replace')
+  OPEN(9, file='venus_data.txt', status='replace')
+  OPEN(10, file='earth_data.txt', status='replace')
+  OPEN(11, file='mars_data.txt', status='replace')
+  OPEN(12, file='jupiter_data.txt', status='replace')
+  OPEN(13, file='saturn_data.txt', status='replace')
+  OPEN(14, file='uranus_data.txt', status='replace')
+  OPEN(15, file='neptune_data.txt', status='replace')
+  OPEN(16, file='energy_error.txt', status='replace')
 
   n = 9
   ndims = 3
@@ -30,17 +37,18 @@ PROGRAM solar_system
 
   t = 0.
   tcount = 0.
-  twrite = 0.01
-  tlim = 100.
+  twrite = 0. ! Will define tlim and twrite in terms of Treal later
+  tlim = 0.
   dt = 0. ! Timestep length will be made non-zero before the first time the end-of-timestep positions/velocities are predicted (i.e. before snap/crackle are calculated)
   dtsqrd = 0.
   dt3 = 0.
   dt4 = 0.
   dt5 = 0.
   dtOpt = 0.
-  eta = 1e-10
+  eta = 1e-20
   G = 1.
   pi = 4. * ATAN(1.)
+  year = 3.15e7 ! Number of seconds in a year
   r = 0.
   v = 0.
   a = 0.
@@ -73,7 +81,9 @@ PROGRAM solar_system
   Treal = ((Lreal**3)/(Mreal*Greal))**0.5 ! Time unit is determined by the other units
   Vreal = Lreal / Treal ! Velocity unit is determined by the other units
   
-  
+  ! Time Limits
+  twrite = (0.01 * year) / Treal ! Write to file 100 times each year (in SI units)
+  tlim = (1000. * year) / Treal ! Run for 1000 years (in SI units)
 
   ! Initial Conditions
 
@@ -181,7 +191,7 @@ PROGRAM solar_system
               jrk(k,i) = jrk(k,i) + (G * m(j) * ((dv(k)/(dist3)) - (3.*vdotr*dr(k)/(dist5))))
            END DO
         END DO
-        dtOpt(i) = ((eta/amagsqrd)**0.5)
+        dtOpt(i) = SQRT(eta/amagsqrd)
      END DO
 
      dt = MINVAL(dtOpt(:)) ! Adaptive timestep length
@@ -274,14 +284,28 @@ PROGRAM solar_system
 
      ! Write to files
      IF (t >= tlim) THEN
-        WRITE(7,*) r(1,:)
-        WRITE(8,*) r(2,:)
-        WRITE(9,*) Eerr, t
+        WRITE(7,*) r(:,1), v(:,1)
+        WRITE(8,*) r(:,2), v(:,2)
+        WRITE(9,*) r(:,3), v(:,3)
+        WRITE(10,*) r(:,4), v(:,4)
+        WRITE(11,*) r(:,5), v(:,5)
+        WRITE(12,*) r(:,6), v(:,6)
+        WRITE(13,*) r(:,7), v(:,7)
+        WRITE(14,*) r(:,8), v(:,8)
+        WRITE(15,*) r(:,9), v(:,9)
+        WRITE(16,*) Eerr, t
         EXIT    
      ELSE IF (tcount >= twrite) THEN
-        WRITE(7,*) r(1,:)
-        WRITE(8,*) r(2,:)
-        WRITE(9,*) Eerr, t
+        WRITE(7,*) r(:,1), v(:,1)
+        WRITE(8,*) r(:,2), v(:,2)
+        WRITE(9,*) r(:,3), v(:,3)
+        WRITE(10,*) r(:,4), v(:,4)
+        WRITE(11,*) r(:,5), v(:,5)
+        WRITE(12,*) r(:,6), v(:,6)
+        WRITE(13,*) r(:,7), v(:,7)
+        WRITE(14,*) r(:,8), v(:,8)
+        WRITE(15,*) r(:,9), v(:,9)
+        WRITE(16,*) Eerr, t
         tcount = tcount - twrite
      END IF
 
