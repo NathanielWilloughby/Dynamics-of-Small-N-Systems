@@ -4,7 +4,7 @@ PROGRAM solar_system
   INTEGER, ALLOCATABLE, DIMENSION(:) :: IDs
   DOUBLE PRECISION :: t, G, pi, dt, dtsqrd, dt3, dt4, dt5, twrite, tcount, tlim, E0, E, Eerr, Ek, Ep, vmagsqrd, dist, distsqrd, dist3, dist5, vdotr, eta, amagsqrd
   DOUBLE PRECISION :: Greal, Mreal, Lreal, Vreal, Treal, year
-  DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt
+  DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt, sunDist
   DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: r, v, a, jrk, s, c, apred, jrkpred
 
   OPEN(7, file='sun_data.txt', status='replace')
@@ -34,6 +34,7 @@ PROGRAM solar_system
   ALLOCATE(apred(1:ndims, 1:n))
   ALLOCATE(jrkpred(1:ndims, 1:n))
   ALLOCATE(dtOpt(1:n))
+  ALLOCATE(sunDist(1:n))
 
   t = 0.
   tcount = 0.
@@ -45,7 +46,7 @@ PROGRAM solar_system
   dt4 = 0.
   dt5 = 0.
   dtOpt = 0.
-  eta = 1e-20
+  eta = 1e-10
   G = 1.
   pi = 4. * ATAN(1.)
   year = 3.15e7 ! Number of seconds in a year
@@ -73,6 +74,7 @@ PROGRAM solar_system
   vdotr = 0.
   apred = 0.
   jrkpred = 0.
+  sunDist = 0.
 
   ! N-body unit scaling - should be able to adjust the first three values without breaking the code
   Greal = 6.67e-11 ! Gravitational constant
@@ -284,29 +286,46 @@ PROGRAM solar_system
 
      ! Write to files
      IF (t >= tlim) THEN
-        WRITE(7,*) r(:,1), v(:,1)
-        WRITE(8,*) r(:,2), v(:,2)
-        WRITE(9,*) r(:,3), v(:,3)
-        WRITE(10,*) r(:,4), v(:,4)
-        WRITE(11,*) r(:,5), v(:,5)
-        WRITE(12,*) r(:,6), v(:,6)
-        WRITE(13,*) r(:,7), v(:,7)
-        WRITE(14,*) r(:,8), v(:,8)
-        WRITE(15,*) r(:,9), v(:,9)
-        WRITE(16,*) Eerr, t
-        EXIT    
+         sunDist = 0.
+         DO i=2,n
+            DO k=1,ndims
+               sunDist(i) = sunDist(i) + ((r(k,i)-r(k,1))**2)
+            END DO
+            sunDist(i) = SQRT(sunDist(i))
+         END DO
+      
+
+         WRITE(7,*) r(:,1), v(:,1)
+         WRITE(8,*) r(:,2), v(:,2), sunDist(2)
+         WRITE(9,*) r(:,3), v(:,3), sunDist(3)
+         WRITE(10,*) r(:,4), v(:,4), sunDist(4)
+         WRITE(11,*) r(:,5), v(:,5), sunDist(5)
+         WRITE(12,*) r(:,6), v(:,6), sunDist(6)
+         WRITE(13,*) r(:,7), v(:,7), sunDist(7)
+         WRITE(14,*) r(:,8), v(:,8), sunDist(8)
+         WRITE(15,*) r(:,9), v(:,9), sunDist(9)
+         WRITE(16,*) Eerr, t
+         EXIT    
      ELSE IF (tcount >= twrite) THEN
-        WRITE(7,*) r(:,1), v(:,1)
-        WRITE(8,*) r(:,2), v(:,2)
-        WRITE(9,*) r(:,3), v(:,3)
-        WRITE(10,*) r(:,4), v(:,4)
-        WRITE(11,*) r(:,5), v(:,5)
-        WRITE(12,*) r(:,6), v(:,6)
-        WRITE(13,*) r(:,7), v(:,7)
-        WRITE(14,*) r(:,8), v(:,8)
-        WRITE(15,*) r(:,9), v(:,9)
-        WRITE(16,*) Eerr, t
-        tcount = tcount - twrite
+         sunDist = 0.
+         DO i=2,n
+            DO k=1,ndims
+               sunDist(i) = sunDist(i) + ((r(k,i)-r(k,1))**2)
+            END DO
+            sunDist(i) = SQRT(sunDist(i))
+         END DO
+
+         WRITE(7,*) r(:,1), v(:,1)
+         WRITE(8,*) r(:,2), v(:,2), sunDist(2)
+         WRITE(9,*) r(:,3), v(:,3), sunDist(3)
+         WRITE(10,*) r(:,4), v(:,4), sunDist(4)
+         WRITE(11,*) r(:,5), v(:,5), sunDist(5)
+         WRITE(12,*) r(:,6), v(:,6), sunDist(6)
+         WRITE(13,*) r(:,7), v(:,7), sunDist(7)
+         WRITE(14,*) r(:,8), v(:,8), sunDist(8)
+         WRITE(15,*) r(:,9), v(:,9), sunDist(9)
+         WRITE(16,*) Eerr, t
+         tcount = tcount - twrite
      END IF
 
   END DO
