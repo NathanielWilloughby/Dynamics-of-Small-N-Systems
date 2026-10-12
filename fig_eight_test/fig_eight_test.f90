@@ -1,9 +1,8 @@
 PROGRAM fig_eight
   IMPLICIT NONE
   INTEGER :: n, i, j, k, ndims
-  INTEGER, ALLOCATABLE, DIMENSION(:) :: IDs
-  DOUBLE PRECISION :: t, G, pi, dt, dtsqrd, dt3, dt4, dt5, twrite, tcount, tlim, E0, E, Eerr, Ek, Ep, vmagsqrd, vdotr, eta, amagsqrd, dist, distsqrd, dist3, dist5
-  DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt
+  DOUBLE PRECISION :: t, G, pi, dt, dtsqrd, dt3, dt4, dt5, twrite, tcount, tlim, E0, E, Eerr, Ek, Ep, vmagsqrd, vdotr, eta, amagsqrd, dist, distsqrd, dist3, dist5, mTot
+  DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt, comPos, comVel
   DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: r, v, a, jrk, s, c, apred, jrkpred
 
   OPEN(7, file='xpositions.txt', status='replace')
@@ -13,7 +12,6 @@ PROGRAM fig_eight
   n = 3
   ndims = 3
 
-  ALLOCATE(IDs(1:n))
   ALLOCATE(m(1:n))
   ALLOCATE(r(1:ndims, 1:n))
   ALLOCATE(v(1:ndims, 1:n))
@@ -26,6 +24,8 @@ PROGRAM fig_eight
   ALLOCATE(apred(1:ndims, 1:n))
   ALLOCATE(jrkpred(1:ndims, 1:n))
   ALLOCATE(dtOpt(1:n))
+  ALLOCATE(comPos(1:ndims))
+  ALLOCATE(comVel(1:ndims))
 
   t = 0.
   tcount = 0.
@@ -46,7 +46,6 @@ PROGRAM fig_eight
   jrk = 0. ! 'jrk' rather than 'j' to distinguish it from the iteration variable 'j'
   s = 0.
   c = 0.
-  IDs = 0.
   m = 1.
   E0 = 0.
   E = 0.
@@ -64,6 +63,9 @@ PROGRAM fig_eight
   vdotr = 0.
   apred = 0.
   jrkpred = 0.
+  comPos = 0.
+  comVel = 0.
+  mTot = 0.
 
   r(1,1) = 0.9700436
   r(2,1) = -0.24308753
@@ -78,9 +80,25 @@ PROGRAM fig_eight
   v(2,3) = -2. * v(2,1)
   v(3,3) = -2. * v(3,1)
 
+  ! COM frame calculation
   DO i=1,n
-     IDs(i) = i
+     mTot = mTot + m(i)
+     DO k=1,ndims
+         comPos(k) = comPos(k) + (m(i) * r(k,i))
+         comVel(k) = comVel(k) + (m(i) * v(k,i))
+     END DO
   END DO
+  comPos(:) = comPos(:) / mTot
+  comVel(:) = comVel(:) / mTot
+
+  ! Moving into COM frame
+  DO i=1,n
+      DO k=1,ndims
+         r(k,i) = r(k,i) - comPos(k)
+         v(k,i) = v(k,i) - comVel(k)
+      END DO
+   END DO
+   
 
   DO i=1,n
      ! Kinetic Energy

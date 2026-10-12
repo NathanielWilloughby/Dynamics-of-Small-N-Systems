@@ -1,10 +1,9 @@
 PROGRAM solar_system
   IMPLICIT NONE
   INTEGER :: n, i, j, k, ndims
-  INTEGER, ALLOCATABLE, DIMENSION(:) :: IDs
   DOUBLE PRECISION :: t, G, pi, dt, dtsqrd, dt3, dt4, dt5, twrite, tcount, tlim, E0, E, Eerr, Ek, Ep, vmagsqrd, dist, distsqrd, dist3, dist5, vdotr, eta, amagsqrd
-  DOUBLE PRECISION :: Greal, Mreal, Lreal, Vreal, Treal, year
-  DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt, sunDist
+  DOUBLE PRECISION :: Greal, Mreal, Lreal, Vreal, Treal, year, mTot
+  DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dr, dv, dtOpt, sunDist, comPos, comVel
   DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: r, v, a, jrk, s, c, apred, jrkpred
 
   OPEN(7, file='sun_data.txt', status='replace')
@@ -21,7 +20,6 @@ PROGRAM solar_system
   n = 9
   ndims = 3
 
-  ALLOCATE(IDs(1:n))
   ALLOCATE(m(1:n))
   ALLOCATE(r(1:ndims, 1:n))
   ALLOCATE(v(1:ndims, 1:n))
@@ -35,6 +33,8 @@ PROGRAM solar_system
   ALLOCATE(jrkpred(1:ndims, 1:n))
   ALLOCATE(dtOpt(1:n))
   ALLOCATE(sunDist(1:n))
+  ALLOCATE(comPos(1:ndims))
+  ALLOCATE(comVel(1:ndims))
 
   t = 0.
   tcount = 0.
@@ -56,7 +56,6 @@ PROGRAM solar_system
   jrk = 0. ! 'jrk' rather than 'j' to distinguish it from the iteration variable 'j'
   s = 0.
   c = 0.
-  IDs = 0.
   m = 0.
   E0 = 0.
   E = 0.
@@ -75,6 +74,9 @@ PROGRAM solar_system
   apred = 0.
   jrkpred = 0.
   sunDist = 0.
+  comPos = 0.
+  comVel = 0.
+  mTot = 0.
 
   ! N-body unit scaling - should be able to adjust the first three values without breaking the code
   Greal = 6.67e-11 ! Gravitational constant
@@ -132,9 +134,25 @@ PROGRAM solar_system
   r(1,9) = 4.52e12 / Lreal
   v(2,9) = 0.54e4 / Vreal
 
+  ! COM frame calculation
   DO i=1,n
-     IDs(i) = i
+     mTot = mTot + m(i)
+     DO k=1,ndims
+         comPos(k) = comPos(k) + (m(i) * r(k,i))
+         comVel(k) = comVel(k) + (m(i) * v(k,i))
+     END DO
   END DO
+  comPos(:) = comPos(:) / mTot
+  comVel(:) = comVel(:) / mTot
+
+  ! Moving into COM frame
+  DO i=1,n
+      DO k=1,ndims
+         r(k,i) = r(k,i) - comPos(k)
+         v(k,i) = v(k,i) - comVel(k)
+      END DO
+   END DO
+   
 
   DO i=1,n
      ! Kinetic Energy
