@@ -2,15 +2,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Loading data
-sunx, suny, sunz, sunvx, sunvy, sunvz = np.loadtxt('sun_data.txt', unpack=True)
-merx, mery, merz, mervx, mervy, mervz, merOrbRad = np.loadtxt('mercury_data.txt', unpack=True)
-venx, veny, venz, venvx, venvy, venvz, venOrbRad = np.loadtxt('venus_data.txt', unpack=True)
-earx, eary, earz, earvx, earvy, earvz, earOrbRad = np.loadtxt('earth_data.txt', unpack=True)
-marx, mary, marz, marvx, marvy, marvz, marOrbRad = np.loadtxt('mars_data.txt', unpack=True)
-jupx, jupy, jupz, jupvx, jupvy, jupvz, jupOrbRad = np.loadtxt('jupiter_data.txt', unpack=True)
-satx, saty, satz, satvx, satvy, satvz, satOrbRad = np.loadtxt('saturn_data.txt', unpack=True)
-urax, uray, uraz, uravx, uravy, uravz, uraOrbRad = np.loadtxt('uranus_data.txt', unpack=True)
-nepx, nepy, nepz, nepvx, nepvy, nepvz, nepOrbRad = np.loadtxt('neptune_data.txt', unpack=True)
+sunx, suny, sunz = np.loadtxt('sun_data.txt', unpack=True)
+merx, mery, merz, merOrbRad = np.loadtxt('mercury_data.txt', unpack=True)
+venx, veny, venz, venOrbRad = np.loadtxt('venus_data.txt', unpack=True)
+earx, eary, earz, earOrbRad = np.loadtxt('earth_data.txt', unpack=True)
+marx, mary, marz, marOrbRad = np.loadtxt('mars_data.txt', unpack=True)
+jupx, jupy, jupz, jupOrbRad = np.loadtxt('jupiter_data.txt', unpack=True)
+satx, saty, satz, satOrbRad = np.loadtxt('saturn_data.txt', unpack=True)
+urax, uray, uraz, uraOrbRad = np.loadtxt('uranus_data.txt', unpack=True)
+nepx, nepy, nepz, nepOrbRad = np.loadtxt('neptune_data.txt', unpack=True)
 Eerr, t = np.loadtxt('energy_error.txt', unpack=True)
 
 fig, (ax_1, ax_2, ax_3) = plt.subplots(1, 3, figsize=(15,5), layout='tight')
