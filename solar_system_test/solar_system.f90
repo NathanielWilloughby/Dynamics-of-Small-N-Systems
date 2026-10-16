@@ -159,7 +159,7 @@ PROGRAM solar_system
         vel(1,i) = -acVel(i) * SIN(initPhase)   ! -vsin(theta). Orbits are anti-clockwise so the x-component of velocity is in the opposite direction to the x-component
                                                 ! of the position relative to the Sun, and the equation used gives the correct sign on the x-velocity for all 
                                                 ! orbital phase angles
-        vel(2,i) = acVel(i) * COS(initPHase)    ! vcos(theta). This gives the correct sign on the y-velocity for all orbital phase angles
+        vel(2,i) = acVel(i) * COS(initPhase)    ! vcos(theta). This gives the correct sign on the y-velocity for all orbital phase angles
     END DO
 
     ! COM frame calculation
