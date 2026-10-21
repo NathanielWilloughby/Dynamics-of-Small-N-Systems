@@ -1,7 +1,7 @@
 PROGRAM plummer_setup_test
     IMPLICIT NONE
     INTEGER :: n, i, j, ndims
-    DOUBLE PRECISION :: pi, ranNum, rad, mTot, twothirds, sqrtr2z2, vesc, root2, gq, q2, velmag
+    DOUBLE PRECISION :: pi, ranNum, ranNum2, rad, mTot, twothirds, sqrtr2z2, vesc, root2, gq, q2, velmag
     DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, origDist, mwithin
     DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: pos, vel
 
@@ -30,6 +30,7 @@ PROGRAM plummer_setup_test
     vel = 0.            ! Velocities
     pi = 4. * ATAN(1.)  ! Pi
     ranNum = 0.         ! Random number
+    ranNum2 = 0.        ! Another random number, used when a random number needs to be generated while the value stored in ranNum is still needed
     rad = 0.            ! Distance of a given object from the origin
     twothirds = 2./3.   ! 2/3
     sqrtr2z2 = 0.       ! SQRT((r**2) - (z**2)). ALSO used to represent SQRT((velmag**2) - (v_z**2)) despite the variable name not implying this
@@ -60,12 +61,12 @@ PROGRAM plummer_setup_test
             CALL RANDOM_NUMBER(ranNum)
             q2 = ranNum ** 2
             gq = q2 * ((1. - q2)**3.5)
-            CALL RANDOM_NUMBER(ranNum)
-            IF ((0.1 * ranNum) < gq) THEN
+            CALL RANDOM_NUMBER(ranNum2)
+            IF ((0.1 * ranNum2) < gq) THEN
                 EXIT ! Ends the current DO loop (which would otherwise run infinitely)
             END IF
         END DO
-        velmag = ranNum * vesc
+        velmag = ranNum * vesc ! Note this uses ranNum, NOT ranNum2
         CALL RANDOM_NUMBER(ranNum)
         vel(3,i) = velmag * (1. - (2. * ranNum))
         CALL RANDOM_NUMBER(ranNum)
