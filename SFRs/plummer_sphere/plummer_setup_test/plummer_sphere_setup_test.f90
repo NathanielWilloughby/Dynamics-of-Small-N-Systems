@@ -55,13 +55,16 @@ PROGRAM plummer_setup_test
         pos(1,i) = COS(2. * pi * ranNum) * sqrtr2z2
         pos(2,i) = SIN(2. * pi * ranNum) * sqrtr2z2
         vesc = root2 * ((1. + (rad**2))**(-1.*0.25))
-99      CALL RANDOM_NUMBER(ranNum)
-        q2 = ranNum ** 2
-        gq = q2 * ((1. - q2)**3.5)
-        CALL RANDOM_NUMBER(ranNum)
-        IF ((0.1 * ranNum) >= gq) THEN
-            GOTO 99
-        END IF
+        DO
+            ! This will run continuously until a certain condition is met (this avoids having to use GOTO)
+            CALL RANDOM_NUMBER(ranNum)
+            q2 = ranNum ** 2
+            gq = q2 * ((1. - q2)**3.5)
+            CALL RANDOM_NUMBER(ranNum)
+            IF ((0.1 * ranNum) < gq) THEN
+                EXIT ! Ends the current DO loop (which would otherwise run infinitely)
+            END IF
+        END DO
         velmag = ranNum * vesc
         CALL RANDOM_NUMBER(ranNum)
         vel(3,i) = velmag * (1. - (2. * ranNum))
