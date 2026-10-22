@@ -92,7 +92,6 @@ PROGRAM fig_eight_test
     vel(2,2) = vel(2,1)
     vel(1,3) = -2. * vel(1,1)
     vel(2,3) = -2. * vel(2,1)
-    vel(3,3) = -2. * vel(3,1)
 
     ! COM frame calculation
     DO i=1,n
