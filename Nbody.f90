@@ -1,8 +1,8 @@
 PROGRAM n_body_main
     IMPLICIT NONE
     INTEGER :: n, i, j, k, ndims
-    DOUBLE PRECISION :: t, twrite, tlim, tcount, dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, eta, G, Greal, recip6, recip24, recip120
-    DOUBLE PRECISION :: E, E0, Ek, Ep, Eerr, dist, dist2, dist3, dist5, vmag2, amag2, vdotr, mTot
+    DOUBLE PRECISION :: t, twrite, tlim, tcount, dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, eta, G, recip6, recip24, recip120
+    DOUBLE PRECISION :: E, E0, Ek, Ep, Eerr, dist, dist2, dist3, dist5, vmag2, amag2, vdotr, mTot, munit, runit, vunit, tunit
     DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dtOpt, comPos, comVel, dr, dv
     DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: pos, vel, acc, jrk, snp, crk, accPred, jrkPred
 
@@ -38,12 +38,12 @@ PROGRAM n_body_main
     recip24 = 1./24.    ! Multiply by this instead of dividing by 24
     recip120 = 1./120.  ! Multiply by this instead of dividing by 120
 
-    ! Adjustable values - given in SI here as it is more intuitive to decide on SI values then adjust to N-body units than deciding on values that are
-    ! already in N-body units
+    ! Adjustable values
     twrite = 0.01       ! File write interval (in seconds)
     tlim = 100.         ! Total simulated time limit (in seconds)
-    Greal = 6.67e-11    ! Gravitational constant in SI
     eta = 1e-5          ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
+    munit = 1.99e30     ! One solar mass in kg (this will be equal to one N-body mass unit)
+    runit = 3.086e16    ! One parsec in m (this will be equal to one N-body length unit)
 
     ! Initialising other variables
     t = 0.              ! Time
@@ -80,11 +80,17 @@ PROGRAM n_body_main
     dist3 = 0.          ! dist^3
     dist5 = 0.          ! dist^5. Note the absence of dist4 due to dist^4 not being used anywhere in the simulation
     mTot = 0.           ! Total mass
-
+    tunit = 0.          ! 1 N-body time unit in years, will be given a non-zero value before the first timestep, but the actual value is only needed for the file writes
+    vunit = 0.          ! 1 N-body velocity unit in km/s, will be a given a non-zero value before the first timestep, but the actual value is only needed for the file writes
 
     ! Initial conditions
-    m = 1.99e30         ! All objects have a mass of 1 solar mass for now
-    CALL setup_plummer(n, pos, vel) ! Sets up a cluster of n stars distributed in a Plummer sphere
+
+    ! Choose a setup subroutine to call
+    ! Currently available:
+    ! setup_plummer(n, pos, vel, m) - Plummer sphere
+    ! setup_fig_eight(pos, vel, m) - Figure of eight test
+
+    CALL setup_plummer(n, pos, vel, m) ! Sets up a cluster of n stars distributed in a Plummer sphere
 
     ! Conversion to COM frame - Note that mTot, comPos and comVel do not need to be reset to zero here as they were initialised to be zero and will not have had their
     ! values modified yet
@@ -109,10 +115,9 @@ PROGRAM n_body_main
     END DO
 
 
-    ! N-body unit conversion
+    ! N-body unit conversion - this gives the time and velocity units to divide by when doing the file outputs
+    CALL n_body_conversion(munit, runit, tunit, vunit)
 
-    ! Initial total energy. Note that Ek and Ep do not need to be reset to zero here as they will not have been changed from zero as of this point in the simulation
-    ! because the Ek and Ep used in the n_body_conversion subroutine are variables that are local to that subroutine
     ! Initial total energy. Note Ek and Ep do not need to be reset to zero here as they will not have been changed from zero as of this point in the simulation
     DO i=1,n
         vmag2 = 0. ! Needs to be reset to zero for each iteration
@@ -311,12 +316,28 @@ PROGRAM n_body_main
 
 END PROGRAM n_body_main
 
+! Gives the N-body velocity unit in km/s and the time unit in years
+SUBROUTINE n_body_conversion(munit, runit, tunit, vunit)
+    IMPLICIT NONE
+    DOUBLE PRECISION, INTENT(IN) :: munit, runit
+    DOUBLE PRECISION, INTENT(OUT) :: tunit, vunit
+    DOUBLE PRECISION :: G, year
+
+    G = 6.67e11 ! Gravitational constant in SI units
+    year = 365.24 * 86400. ! 86400 seconds in a day, 365.24 days in a year
+    tunit = SQRT((runit**3) / (G * munit)) / year ! This gives the N-body time unit in years
+    vunit = runit / (1.e3 * year) ! Gives N-body velocity unit in km/s (the factor of 1.e3 on the denominator converts from m to km)
+
+    RETURN
+
+END SUBROUTINE n_body_conversion
+
 ! Plummer sphere (3 dimensions only). Method from Aarseth, Hénon and Wielen (1974)
-SUBROUTINE setup_plummer(n, pos, vel)
+SUBROUTINE setup_plummer(n, pos, vel, m)
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: n
     INTEGER :: i
-    DOUBLE PRECISION, INTENT(OUT) :: pos(1:3, 1:n), vel(1:3, 1:n)
+    DOUBLE PRECISION, INTENT(OUT) :: pos(1:3, 1:n), vel(1:3, 1:n), m(1:n)
     DOUBLE PRECISION :: ranNum, ranNum2, twopi, twothirds, rad, sqrtr2z2, vesc, root2, q2, gq, vmag
 
     twopi = 8. * ATAN(1.)   ! 2 * pi
@@ -334,6 +355,7 @@ SUBROUTINE setup_plummer(n, pos, vel)
     gq = 0.                 ! g(q) = q^2 - (1-q^2)^7/2
     root2 = SQRT(2.)        ! Square root of 2
 
+    m = 1.99e30 ! All objects will be 1 solar mass (for now)
     DO i=1,n
         CALL RANDOM_NUMBER(ranNum)
         rad = SQRT(1./((ranNum**(-1.*twothirds)) - 1.))
@@ -367,52 +389,30 @@ SUBROUTINE setup_plummer(n, pos, vel)
 
 END SUBROUTINE setup_plummer
 
-SUBROUTINE n_body_conversion(n, ndims, mTot, pos, vel, m) ! CURRENTLY UNFINISHED AND NOT IMPLEMENTED
-    IMPLICIT NONE
-    INTEGER :: i, j, k
-    INTEGER, INTENT(IN) :: n, ndims
-    DOUBLE PRECISION :: E0, Ek, Ep, vmag2, dist2, G
-    DOUBLE PRECISION, INTENT(INOUT) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), m(1:n), mTot
+! Figure of eight test setup - use this to test the code works as intended. This subroutine is designed with n=3 in mind 
+! so the value of n needs to be set to this near the top of the main program code
+SUBROUTINE setup_fig_eight(pos, vel, m)
+    DOUBLE PRECISION, INTENT(OUT) :: pos(1:3, 1:3), vel(1:3, 1:3), m(1:3)
 
-    ! Energies - these will not be passed out of this subroutine as the initial total energy will be recalculated in the main program as a sense check
-    ! After converting to N-body units, the total energy should be -0.25 (Aarseth, 2003)
-    E0 = 0.
-    Ek = 0.
-    Ep = 0.
+    m = 1.
 
-    vmag2 = 0. ! Velocity magnitude squared (vel. vel)
-    dist2 = 0. ! Distance between two objects squared
+    pos(1,1) = 0.9700436
+    pos(2,1) = -0.24308753
+    pos(1,2) = -1. * pos(1,1)
+    pos(2,2) = -1. * pos(2,1)
+    pos(1,3) = 0. ! Should already be the case on calling this subroutine, but this line is included on the off chance it isn't the case
+    pos(2,3) = 0. ! See above comment
+    pos(3,:) = 0. ! See comment two lines above
 
-    G = 1. ! Gravitational constant in N-body units
-
-    DO i=1,n
-        m(i) = m(i) / mTot ! Scales masses so that the total mass is 1 N-body mass unit
-    END DO
-
-    mTot = 1. ! Scales the value of mTot to 1 N-body mass unit. Must be done AFTER scaling the individual masses
-
-    ! Energy
-    DO i=1,n
-        vmag2 = 0. ! Needs to be reset to zero for each iteration
-        DO k=1,ndims
-            vmag2 = vmag2 + (vel(k,i)**2)
-        END DO
-        Ek = Ek + (0.5 * m(i) * vmag2)
-
-        DO j=i+1,n ! These boundaries avoid double-counting pairs of objects in the potential energy calculations
-            dist2 = 0. ! Needs to be reset to zero for each iteration
-            DO k=1,ndims
-                dist2 = dist2 + ((pos(k,i)-pos(k,j))**2)
-            END DO
-            Ep = Ep - ((G * m(i) * m(j)) / SQRT(dist2))
-        END DO
-    END DO
-
-    E0 = Ek + Ep
+    vel(1,1) = 0.466203685
+    vel(2,1) = 0.43236573
+    vel(1,2) = vel(1,1)
+    vel(2,2) = vel(2,1)
+    vel(1,3) = -2. * vel(1,1)
+    vel(2,3) = -2. * vel(2,1)
+    vel(3,:) = 0. ! Should already be the case on calling this subroutine, but this line is included on the off chance it isn't the case
 
     RETURN
 
-END SUBROUTINE n_body_conversion
-
-
+END SUBROUTINE setup_fig_eight
 
