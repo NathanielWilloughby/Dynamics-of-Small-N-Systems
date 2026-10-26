@@ -41,7 +41,7 @@ PROGRAM n_body_main
     ! Adjustable values
     twrite = 1.e-3      ! File write interval (in multiples of 14.9 Myr)
     tlim = 1.           ! Total simulated time limit (in multiples of 14.9 Myr)
-    eta = 1.e-5         ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
+    eta = 1.e20         ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
     munit = 1.99e30     ! One solar mass in kg (this will be equal to one N-body mass unit)
     runit = 3.086e16    ! One parsec in m (this will be equal to one N-body length unit)
     EerrLim = 1.e-6     ! Stop the code if the energy error exceeds this value at any point
@@ -138,6 +138,13 @@ PROGRAM n_body_main
     END DO
     
     E0 = Ek + Ep
+
+    ! Writing initial conditions to files
+    WRITE(7,*) pos(1,:)
+    WRITE(8,*) pos(2,:)
+    WRITE(9,*) pos(3,:)
+    WRITE(10,*) Eerr, t*tunit ! Note that Eerr will be zero here as it will not have been changed since it was initially set to zero.
+                              ! The same applies to t*tunit as the value of t will not have been increased from zero yet
 
     ! Main Loop
     DO
@@ -404,4 +411,6 @@ SUBROUTINE setup_fig_eight(pos, vel, m)
     RETURN
 
 END SUBROUTINE setup_fig_eight
+
+
 
