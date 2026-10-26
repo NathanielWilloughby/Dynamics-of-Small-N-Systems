@@ -2,7 +2,7 @@ PROGRAM n_body_main
     IMPLICIT NONE
     INTEGER :: n, i, j, k, ndims
     DOUBLE PRECISION :: t, twrite, tlim, tcount, dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, eta, G, recip6, recip24, recip120
-    DOUBLE PRECISION :: E, E0, Ek, Ep, Eerr, dist, dist2, dist3, dist5, vmag2, amag2, vdotr, mTot, munit, runit, vunit, tunit
+    DOUBLE PRECISION :: E, E0, Ek, Ep, Eerr, EerrLim, dist, dist2, dist3, dist5, vmag2, amag2, vdotr, mTot, munit, runit, vunit, tunit
     DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:) :: m, dtOpt, comPos, comVel, dr, dv
     DOUBLE PRECISION, ALLOCATABLE, DIMENSION(:,:) :: pos, vel, acc, jrk, snp, crk, accPred, jrkPred
 
@@ -39,11 +39,12 @@ PROGRAM n_body_main
     recip120 = 1./120.  ! Multiply by this instead of dividing by 120
 
     ! Adjustable values
-    twrite = 1e-3       ! File write interval (in multiples of 14.9 Myr)
+    twrite = 1.e-3      ! File write interval (in multiples of 14.9 Myr)
     tlim = 1.           ! Total simulated time limit (in multiples of 14.9 Myr)
-    eta = 1e-5          ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
+    eta = 1.e-5         ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
     munit = 1.99e30     ! One solar mass in kg (this will be equal to one N-body mass unit)
     runit = 3.086e16    ! One parsec in m (this will be equal to one N-body length unit)
+    EerrLim = 1.e-6     ! Stop the code if the energy error exceeds this value at any point
 
     ! Initialising other variables
     t = 0.              ! Time
@@ -247,67 +248,55 @@ PROGRAM n_body_main
         t = t + dt
         tcount = tcount + dt
 
-        ! File writes
-        IF (t >= tlim) THEN ! This takes priority over the condition (tcount >= twrite) in the event that both are satisfied
-            
-            ! Energy error calculation. This will be re-used in the ELSE IF segment after this, but I don't want it to be calculated on every single timestep
-            ! so increasing the number of lines of code by re-writing this block of code again later will decrease the runtime
-            DO i=1,n
-                vmag2 = 0.
-                DO k=1,ndims
-                    vmag2 = vmag2 + (vel(k,i)**2)
-                END DO
-                Ek = Ek + (0.5 * m(i) * vmag2)
-
-                DO j=i+1,n
-                    dist2 = 0.
-                    DO k=1,ndims
-                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
-                    END DO
-                    dist = SQRT(dist2)
-                    Ep = Ep - ((G * m(i) * m(j)) / dist)
-                END DO
+        ! Checking energy error (this should be done every timestep because the code should stop running if the energy error gets too large)
+        ! The outputs from before the energy error exceeds the limit are fine to keep, but anything after the energy error exceeds the limit should be discarded
+        ! so time is saved by just ending the simulation if the energy error exceeds the limit. Data will be written to the files for the timestep in which the energy
+        ! error becomes too large because it could be useful to see if the outputs give some insight as to why the energy error became so large (especially if it is sudden)
+        Ek = 0.
+        Ep = 0.
+        DO i=1,n
+            vmag2 = 0.
+            DO k=1,ndims
+                vmag2 = vmag2 + (vel(k,i)**2)
             END DO
-            E = Ek + Ep
-            Eerr = ABS((E-E0)/E0)
+            Ek = Ek + (0.5 * m(i) * vmag2)
 
+            DO j=i+1,n
+                dist2 = 0.
+                DO k=1,ndims
+                    dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                END DO
+                dist = SQRT(dist2)
+                Ep = Ep - ((G * m(i) * m(j)) / dist)
+            END DO
+        END DO
+        E = Ek + Ep
+        Eerr = ABS((E-E0)/E0)
 
-            ! File writes
+        IF (Eerr >= EerrLim) THEN ! Stop the code if the energy error is too large. This takes priority over the regular file write conditions that depend on either
+                                  ! the simulated time elapsed since the beginning of the simulation (file write if t>=tlim, then end the simulation) or on the 
+                                  ! file write interval being reached (file write if tcount>=twrite, then subtract twrite from tcount)
+            WRITE(6,*) 'Simulation halted prematurely due to high fractional energy error of', Eerr, 'after', t*tunit, 'years.'
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
             WRITE(9,*) pos(3,:)
-            WRITE(10,*) Eerr, t
+            WRITE(10,*) Eerr, t*tunit
+            EXIT
+        END IF
+            
+        ! File writes
+        IF (t >= tlim) THEN ! This takes priority over the condition (tcount >= twrite) in the event that both are satisfied
+            WRITE(7,*) pos(1,:)
+            WRITE(8,*) pos(2,:)
+            WRITE(9,*) pos(3,:)
+            WRITE(10,*) Eerr, t*tunit
             EXIT
 
         ELSE IF (tcount >= twrite) THEN
-
-            ! Energy error
-            DO i=1,n
-                vmag2 = 0.
-                DO k=1,ndims
-                    vmag2 = vmag2 + (vel(k,i)**2)
-                END DO
-                Ek = Ek + (0.5 * m(i) * vmag2)
-
-                DO j=i+1,n
-                    dist2 = 0.
-                    DO k=1,ndims
-                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
-                    END DO
-                    dist = SQRT(dist2)
-                    Ep = Ep - ((G * m(i) * m(j)) / dist)
-                END DO
-            END DO
-            E = Ek + Ep
-            Eerr = ABS((E-E0)/E0)
-
-
-            ! File writes
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
             WRITE(9,*) pos(3,:)
-            WRITE(10,*) Eerr, t
-
+            WRITE(10,*) Eerr, t*tunit
             tcount = tcount - twrite ! Not just resetting tcount to zero because this could cause the file outputs to drift from the intended times over the course
                                      ! of the simulation. Subtracting twrite keeps the file outputs at times as close to multiples of twrite as possible
         END IF
