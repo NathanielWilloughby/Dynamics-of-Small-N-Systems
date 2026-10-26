@@ -39,12 +39,12 @@ PROGRAM n_body_main
     recip120 = 1./120.  ! Multiply by this instead of dividing by 120
 
     ! Adjustable values
-    twrite = 1.e-3      ! File write interval (in multiples of 14.9 Myr)
-    tlim = 1.           ! Total simulated time limit (in multiples of 14.9 Myr)
-    eta = 1.e20         ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
+    twrite = 1.e-18     ! File write interval (in multiples of 14.9 Myr)
+    tlim = 1.e-14       ! Total simulated time limit (in multiples of 14.9 Myr)
+    eta = 1e18          ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
     munit = 1.99e30     ! One solar mass in kg (this will be equal to one N-body mass unit)
     runit = 3.086e16    ! One parsec in m (this will be equal to one N-body length unit)
-    EerrLim = 1.e-6     ! Stop the code if the energy error exceeds this value at any point
+    EerrLim = 1.e-5     ! Stop the code if the energy error exceeds this value at any point
 
     ! Initialising other variables
     t = 0.              ! Time
@@ -319,10 +319,10 @@ SUBROUTINE n_body_conversion(munit, runit, tunit, vunit)
     DOUBLE PRECISION, INTENT(OUT) :: tunit, vunit
     DOUBLE PRECISION :: G, year
 
-    G = 6.67e11 ! Gravitational constant in SI units
+    G = 6.67e-11 ! Gravitational constant in SI units
     year = 365.24 * 86400. ! 86400 seconds in a day, 365.24 days in a year
     tunit = SQRT((runit**3) / (G * munit)) / year ! This gives the N-body time unit in years
-    vunit = runit / (1.e3 * year) ! Gives N-body velocity unit in km/s (the factor of 1.e3 on the denominator converts from m to km)
+    vunit = runit / (1.e3 * tunit * year) ! Gives N-body velocity unit in km/s (the factor of 1.e3 on the denominator converts from m to km)
 
     RETURN
 
