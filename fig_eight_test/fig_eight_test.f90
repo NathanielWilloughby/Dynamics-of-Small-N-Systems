@@ -30,8 +30,8 @@ PROGRAM fig_eight_test
 
     t = 0.              ! Time
     tcount = 0.         ! Tracks the time between file writes
-    twrite = 0.         ! Time between file writes, to be defined in terms of tReal later
-    tlim = 0.           ! Total simulated time, to be defined in terms of tReal later
+    twrite = 0.         ! Time between file writes, to be given a non-zero value later
+    tlim = 0.           ! Total simulated time, to be given a non-zero value later
     dt = 0.             ! Timestep length, will vary each timestep according to the acceleration of each object, and will be made non-zero before 
                         ! the first time it is used in calculations
     dt2 = 0.            ! dt^2
