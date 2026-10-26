@@ -246,6 +246,8 @@ PROGRAM fig_eight_test
             
             ! Energy error calculation. This will be re-used in the ELSE IF segment after this, but I don't want it to be calculated on every single timestep
             ! so increasing the number of lines of code by re-writing this block of code again later will decrease the runtime
+            Ek = 0.
+            Ep = 0.
             DO i=1,n
                 vmag2 = 0.
                 DO k=1,ndims
@@ -275,6 +277,8 @@ PROGRAM fig_eight_test
         ELSE IF (tcount >= twrite) THEN
 
             ! Energy error
+            Ek = 0.
+            Ep = 0.
             DO i=1,n
                 vmag2 = 0.
                 DO k=1,ndims
