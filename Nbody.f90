@@ -13,7 +13,7 @@ PROGRAM n_body_main
     OPEN(10, file='energy_error.txt', status='replace')
 
     ! Variables needed for array size allocation - the values of these CAN be changed (although ndims probably shouldn't be)
-    n = 1000        ! Number of objects
+    n = 10          ! Number of objects
     ndims = 3       ! Number of dimensions
 
     ! Array size allocation
@@ -39,8 +39,8 @@ PROGRAM n_body_main
     recip120 = 1./120.  ! Multiply by this instead of dividing by 120
 
     ! Adjustable values
-    twrite = 0.01       ! File write interval (in seconds)
-    tlim = 100.         ! Total simulated time limit (in seconds)
+    twrite = 1e-3       ! File write interval (in multiples of 14.9 Myr)
+    tlim = 1.           ! Total simulated time limit (in multiples of 14.9 Myr)
     eta = 1e-5          ! Accuracy parameter used in calculating the optimal timestep lengths for each object. All timestep lengths are scaled by SQRT(eta)
     munit = 1.99e30     ! One solar mass in kg (this will be equal to one N-body mass unit)
     runit = 3.086e16    ! One parsec in m (this will be equal to one N-body length unit)
