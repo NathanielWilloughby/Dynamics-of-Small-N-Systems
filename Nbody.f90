@@ -13,11 +13,14 @@ PROGRAM n_body_master
     CALL n_body_conversion(munit, runit, tunit, vunit)
 
     ! Run N-body simulations by repeatedly calling n_body_simulation(n, ndims, initialConditions, tunit, vunit)
-    ! n = number of objects, ndims = number of dimensions (which should probably always be 3), initialConditions = an integer to determine which setup subroutine to use,
-    ! eta = accuracy parameter,tunit = N-body time unit in years, vunit = N-body velocity unit in km/s, tLim = simulation time limit in years, 
-    ! tWrite = time between successive file writes in years
+    ! n - number of objects
+    ! ndims - number of dimensions (probably should always be 3)
+    ! initialConditions - an integer used to determine which setup subroutine to use
+    ! tunit - N-body time unit in years
+    ! vunit - N-body velocity unit in km/s
     ! Currently available initial conditions are:
-    ! 1 - Plummer sphere, 2 - Figure of eight test (assumes n=3)
+    ! 1 - Plummer sphere
+    ! 2 - Figure of eight test (assumes n=3)
     ! If any integer that is not listed above is used, the program will default to the Plummer sphere setup
     DO i=1,nsims
         CALL n_body_simulation(10, 3, 1, tunit, vunit)
@@ -34,24 +37,55 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     DOUBLE PRECISION :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     DOUBLE PRECISION :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     DOUBLE PRECISION :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
-    DOUBLE PRECISION :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta
+    DOUBLE PRECISION :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n)
 
     ! Variable definitions:
-    ! n = number of objects, ndims = number of dimensions, initialConditions = an integer to determine which setup subroutine to use,
-    ! tunit = N-body time unit in years, vunit = N-body velocity unit in km/s, i, j and k = iteration variables, t = current simulation time, 
-    ! tcount = time since last file write (not exactly, since it is NOT reset to zero after each file write, but is instead decreased by tWrite), 
-    ! tLim = simulation time limit, tWrite = time between successive file writes, dtOpt = optimal timestep lengths for each object, 
-    ! dt = timestep length for the current timestep, dt2, dt3, dt4, dt5 = timestep lengths raised to various powers, recipdt2, recipdt3 = 1/dt2 and 1/dt3, 
-    ! recip6, recip24, recip120 = 1/6, 1/24 and 1/120, E = total energy, E0 = initial total energy, Ek = kinetic energy, Ep = potential energy, 
-    ! Eerr = fractional energy error, EerrLim = maximum allowed value of Eerr, dist = distance between two objects, 
-    ! dist2, dist3, dist5 = distance raised to various powers (note dist4 is absent as it is not needed),
-    ! dr = displacement vector between two objects (pos_i - pos_j), dv = velocity difference vector between two objects (vel_i - vel_j), 
-    ! vmag2 = magnitude of the velocity squared (vel . vel), amag2 = magnitude of the acceleration squared (acc . acc), vdotr = dot product of dv and dr, 
-    ! mTot = total mass in the simulation, m = mass of each object, comPos = center of mass position, comVel = center of mass velocity, pos = position of each object, 
-    ! vel = velocity of each object, acc = acceleration of each object, jrk = jerk of each object, snp = snap of each object, crk = crackle of each object, 
-    ! accPred = acceleration of each object at the predicted end-of-timestep positions and velocities, 
-    ! jrkPred = jerk of each object at the predicted end-of-timestep positions and velocities, eta = accuracy parameter (scales the timestep lengths)
-    ! count is a debugging variable used to track the timestep number
+    ! n - number of objects
+    ! ndims - number of dimensions (should pretty much always be 3)
+    ! initialConditions - an integer specifying which setup subroutine should be used (see n_body_master for more information)
+    ! tunit - N-body time unit in years
+    ! vunit - N-body velocity unit in km/s
+    ! i - iteration variable used when looping over all objects
+    ! j - iteration variable used when looping over pairs of objects
+    ! k - iteration variable used when looping over dimensions
+    ! count - debug variable that tracks the current timestep number
+    ! t - current simulation time
+    ! tcount - time since previous file write (not exactly, since file writes are followed by tcount = tcount - tWrite rather than tcount = 0.)
+    ! tLim - simulation time limit
+    ! tWrite - time between successive file writes
+    ! dtOpt - optimal timestep lengths for each object
+    ! dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3 - timestep length and various powers of it
+    ! recip6 - 1/6
+    ! recip24 - 1/24
+    ! recip120 - 1/120
+    ! E - total energy
+    ! E0 - initial (t=0) total energy
+    ! Ek - kinetic energy
+    ! Ep - potential energy
+    ! Eerr - fractional difference between total energy and initial total energy
+    ! EerrLim - maximum allowed value of Eerr
+    ! dist, dist2, dist3, dist5 - distance between two objects and various powers of it (note that dist4 is absent because it is not needed)
+    ! dist2 also stores the distance from the origin squared at times
+    ! dr - displacement vector between two objects (pos_i - pos_j)
+    ! dv - difference in velocity between two objects (vel_i - vel_j)
+    ! vmag2 - velocity magnitude squared (vel . vel)
+    ! amag2 - acceleration magnitude squared (acc . acc)
+    ! vdotr - dv . dr
+    ! mTot - total mass of all objects
+    ! m - mass of each object
+    ! comPos - centre of mass
+    ! comVel - centre of velocity
+    ! pos - positions
+    ! vel - velocities
+    ! acc - accelerations
+    ! jrk - jerks
+    ! snp - snaps
+    ! crk - crackles
+    ! accPred - accelerations at predicted end-of-timestep positions and velocities (before accounting for snap and crackle)
+    ! jrkPred - jerks at predicted end-of-timestep positions and velocities (before accounting for snap and crackle)
+    ! eta - accuracy parameter. Optimal timestep lengths are scaled by SQRT(eta)
+    ! origDists - distances from the origin
+    ! vmags - velocity magnitudes
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
     OPEN(7, file='xpositions.txt', status='replace')
@@ -60,7 +94,9 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     OPEN(10, file='xvelocities.txt', status='replace')
     OPEN(11, file='yvelocities.txt', status='replace')
     OPEN(12, file='zvelocities.txt', status='replace')
-    OPEN(13, file='energy_error.txt', status='replace')
+    OPEN(13, file='origin_dists.txt', status='replace')
+    OPEN(14, file='velocity_magnitudes.txt', status='replace')
+    OPEN(15, file='energy_error.txt', status='replace')
 
 
 
@@ -121,14 +157,30 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     
     E0 = Ek + Ep
 
-    ! Writing initial conditions to files - will sort this out properly later
+    ! Writing initial conditions to files
+
+    DO i=1,n
+        ! Getting distances from origin and velocity magnitudes
+        dist2 = 0. ! Need to reset to zero for each new i
+        vmag2 = 0. ! Need to reset to zero for each new i
+        DO k=1,ndims
+            dist2 = dist2 + (pos(k,i)**2)
+            vmag2 = vmag2 + (vel(k,i)**2)
+        END DO
+        origDists(i) = SQRT(dist2)
+        vmags(i) = SQRT(vmag2)
+    END DO
+
+        
     WRITE(7,*) pos(1,:)
     WRITE(8,*) pos(2,:)
     WRITE(9,*) pos(3,:)
     WRITE(10,*) vel(1,:)*vunit
     WRITE(11,*) vel(2,:)*vunit
     WRITE(12,*) vel(3,:)*vunit
-    WRITE(13,*) Eerr, t*tunit ! Note that Eerr and t*tunit will both be zero here. They are included so that all output files have the same number of lines
+    WRITE(13,*) origDists(:)
+    WRITE(14,*) vmags(:)*vunit
+    WRITE(15,*) Eerr, t*tunit ! Note that Eerr and t*tunit will both be zero here. They are included so that all output files have the same number of lines
 
     ! t and tcount need to be zero at the start of the simulation
     t = 0.
@@ -269,6 +321,19 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         IF (Eerr >= EerrLim) THEN ! Stop the code if the energy error is too large. This takes priority over the regular file write conditions that depend on either
                                   ! the simulated time elapsed since the beginning of the simulation (file write if t>=tlim, then end the simulation) or on the 
                                   ! file write interval being reached (file write if tcount>=tWrite, then subtract tWrite from tcount)
+
+            DO i=1,n
+                ! Getting distances from origin and velocity magnitudes
+                dist2 = 0. ! Need to reset to zero for each new i
+                vmag2 = 0. ! Need to reset to zero for each new i
+                DO k=1,ndims
+                    dist2 = dist2 + (pos(k,i)**2)
+                    vmag2 = vmag2 + (vel(k,i)**2)
+                END DO
+                origDists(i) = SQRT(dist2)
+                vmags(i) = SQRT(vmag2)
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -276,13 +341,27 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             WRITE(10,*) vel(1,:)*vunit
             WRITE(11,*) vel(2,:)*vunit
             WRITE(12,*) vel(3,:)*vunit
-            WRITE(13,*) Eerr, t*tunit
-            WRITE(6,*) count
+            WRITE(13,*) origDists(:)
+            WRITE(14,*) vmags(:)*vunit
+            WRITE(15,*) Eerr, t*tunit
             EXIT
         END IF
 
         ! File writes
         IF (t >= tLim) THEN ! This takes priority over the coundition (tcount >= tWrite) in the event that both are satisfied
+
+            DO i=1,n
+                ! Getting distances from origin and velocity magnitudes
+                dist2 = 0. ! Need to reset to zero for each new i
+                vmag2 = 0. ! Need to reset to zero for each new i
+                DO k=1,ndims
+                    dist2 = dist2 + (pos(k,i)**2)
+                    vmag2 = vmag2 + (vel(k,i)**2)
+                END DO
+                origDists(i) = SQRT(dist2)
+                vmags(i) = SQRT(vmag2)
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -290,10 +369,25 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             WRITE(10,*) vel(1,:)*vunit
             WRITE(11,*) vel(2,:)*vunit
             WRITE(12,*) vel(3,:)*vunit
-            WRITE(13,*) Eerr, t*tunit
+            WRITE(13,*) origDists(:)
+            WRITE(14,*) vmags(:)*vunit
+            WRITE(15,*) Eerr, t*tunit
             EXIT
 
         ELSE IF (tcount >= tWrite) THEN
+
+            DO i=1,n
+                ! Getting distances from origin and velocity magnitudes
+                dist2 = 0. ! Need to reset to zero for each new i
+                vmag2 = 0. ! Need to reset to zero for each new i
+                DO k=1,ndims
+                    dist2 = dist2 + (pos(k,i)**2)
+                    vmag2 = vmag2 + (vel(k,i)**2)
+                END DO
+                origDists(i) = SQRT(dist2)
+                vmags(i) = SQRT(vmag2)
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -301,7 +395,9 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             WRITE(10,*) vel(1,:)*vunit
             WRITE(11,*) vel(2,:)*vunit
             WRITE(12,*) vel(3,:)*vunit
-            WRITE(13,*) Eerr, t*tunit
+            WRITE(13,*) origDists(:)
+            WRITE(14,*) vmags(:)*vunit
+            WRITE(15,*) Eerr, t*tunit
             tcount = tcount - tWrite ! Not just resetting tcount to zero because this could cause the file outputs to drift from the intended times over the course
                                      ! of the simulation. Subtracting twrite keeps the file outputs at times as close to multiples of twrite as possible
         END IF
