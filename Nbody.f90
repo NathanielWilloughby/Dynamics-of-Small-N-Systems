@@ -30,7 +30,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
     DOUBLE PRECISION, INTENT(IN) :: tunit, vunit
-    INTEGER :: i, j, k
+    INTEGER :: i, j, k, count
     DOUBLE PRECISION :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     DOUBLE PRECISION :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     DOUBLE PRECISION :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
@@ -51,18 +51,29 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! vel = velocity of each object, acc = acceleration of each object, jrk = jerk of each object, snp = snap of each object, crk = crackle of each object, 
     ! accPred = acceleration of each object at the predicted end-of-timestep positions and velocities, 
     ! jrkPred = jerk of each object at the predicted end-of-timestep positions and velocities, eta = accuracy parameter (scales the timestep lengths)
+    ! count is a debugging variable used to track the timestep number
 
-    ! Opening the files that will be written to - will sort this out later
+    ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
+    OPEN(7, file='xpositions.txt', status='replace')
+    OPEN(8, file='ypositions.txt', status='replace')
+    OPEN(9, file='zpositions.txt', status='replace')
+    OPEN(10, file='xvelocities.txt', status='replace')
+    OPEN(11, file='yvelocities.txt', status='replace')
+    OPEN(12, file='zvelocities.txt', status='replace')
+    OPEN(13, file='energy_error.txt', status='replace')
+
+
 
     ! Constants:
     recip6 = 1./6.
     recip24 = 1./24.
     recip120 = 1./120.
-    EerrLim = 1.e-6
+    EerrLim = 1.e-5
 
-    ! Scaling tLim and tWrite
-    tLim = tLim / tunit
-    tWrite = tWrite / tunit
+    ! Adjustable values
+    tLim = 2.e7 / tunit
+    tWrite = 1.e5 / tunit
+    eta = 1.e-11
 
     ! Set up initial conditions
     IF (initialConditions == 2) THEN
@@ -110,13 +121,24 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     
     E0 = Ek + Ep
 
-    ! Writing initial conditions to files - will sort this out later
+    ! Writing initial conditions to files - will sort this out properly later
+    WRITE(7,*) pos(1,:)
+    WRITE(8,*) pos(2,:)
+    WRITE(9,*) pos(3,:)
+    WRITE(10,*) vel(1,:)*vunit
+    WRITE(11,*) vel(2,:)*vunit
+    WRITE(12,*) vel(3,:)*vunit
+    WRITE(13,*) Eerr, t*tunit ! Note that Eerr and t*tunit will both be zero here. They are included so that all output files have the same number of lines
 
     ! t and tcount need to be zero at the start of the simulation
     t = 0.
     tcount = 0.
+
+    count = 0 ! Set to zero before the first timestep, but increase by 1 at the start of every timestep
     ! Main loop
     DO
+        count = count + 1 ! Tracking the current timestep number
+
         acc = 0. ! Needs to be reset to zero for each new timestep
         jrk = 0. ! Needs to be reset to zero for each new timestep
         ! Other variables also need to be reset to zero, but this will occur later in the timestep when those variables are actually needed
@@ -248,16 +270,38 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                                   ! the simulated time elapsed since the beginning of the simulation (file write if t>=tlim, then end the simulation) or on the 
                                   ! file write interval being reached (file write if tcount>=tWrite, then subtract tWrite from tcount)
             ! FILE WRITES
-
+            WRITE(7,*) pos(1,:)
+            WRITE(8,*) pos(2,:)
+            WRITE(9,*) pos(3,:)
+            WRITE(10,*) vel(1,:)*vunit
+            WRITE(11,*) vel(2,:)*vunit
+            WRITE(12,*) vel(3,:)*vunit
+            WRITE(13,*) Eerr, t*tunit
+            WRITE(6,*) count
             EXIT
         END IF
 
         ! File writes
         IF (t >= tLim) THEN ! This takes priority over the coundition (tcount >= tWrite) in the event that both are satisfied
             ! FILE WRITES
+            WRITE(7,*) pos(1,:)
+            WRITE(8,*) pos(2,:)
+            WRITE(9,*) pos(3,:)
+            WRITE(10,*) vel(1,:)*vunit
+            WRITE(11,*) vel(2,:)*vunit
+            WRITE(12,*) vel(3,:)*vunit
+            WRITE(13,*) Eerr, t*tunit
             EXIT
+
         ELSE IF (tcount >= tWrite) THEN
             ! FILE WRITES
+            WRITE(7,*) pos(1,:)
+            WRITE(8,*) pos(2,:)
+            WRITE(9,*) pos(3,:)
+            WRITE(10,*) vel(1,:)*vunit
+            WRITE(11,*) vel(2,:)*vunit
+            WRITE(12,*) vel(3,:)*vunit
+            WRITE(13,*) Eerr, t*tunit
             tcount = tcount - tWrite ! Not just resetting tcount to zero because this could cause the file outputs to drift from the intended times over the course
                                      ! of the simulation. Subtracting twrite keeps the file outputs at times as close to multiples of twrite as possible
         END IF
@@ -278,7 +322,11 @@ SUBROUTINE n_body_conversion(munit, runit, tunit, vunit)
     G = 6.67e-11 ! Gravitational constant in SI units
     year = 365.24 * 86400. ! 86400 seconds in a day, 365.24 days in a year
     tunit = SQRT((runit**3) / (G * munit)) / year ! N-body time unit in years
-    vunit = runit / (1.e3 * tunit * year) ! N-body velocity unit in km/s (the factor of 1.e3 on the denominator converts from m/s to km/s)
+    vunit = runit / (1.e3 * tunit * year)
+    
+    
+    
+    ! N-body velocity unit in km/s (the factor of 1.e3 on the denominator converts from m/s to km/s)
 
     RETURN
     
@@ -291,6 +339,7 @@ SUBROUTINE setup_plummer(n, pos, vel, m)
     INTEGER :: i
     DOUBLE PRECISION, INTENT(OUT) :: pos(1:3, 1:n), vel(1:3, 1:n), m(1:n)
     DOUBLE PRECISION :: ranNum, ranNum2, twopi, twothirds, rad, sqrtr2z2, vesc, root2, q2, gq, vmag
+
 
     twopi = 8. * ATAN(1.)   ! 2 * pi
     ranNum = 0.             ! Random number in a uniform distribution between 0 and 1
@@ -307,7 +356,7 @@ SUBROUTINE setup_plummer(n, pos, vel, m)
     gq = 0.                 ! g(q) = q^2 - (1-q^2)^7/2
     root2 = SQRT(2.)        ! Square root of 2
 
-    m = 1.99e30 ! All objects will be 1 solar mass (for now)
+    m = 1. ! All objects will be 1 solar mass (for now)
     DO i=1,n
         CALL RANDOM_NUMBER(ranNum)
         rad = SQRT(1./((ranNum**(-1.*twothirds)) - 1.))
@@ -317,7 +366,7 @@ SUBROUTINE setup_plummer(n, pos, vel, m)
         sqrtr2z2 = SQRT((rad**2) - (pos(3,i)**2))
         pos(1,i) = COS(twopi * ranNum) * sqrtr2z2
         pos(2,i) = SIN(twopi * ranNum) * sqrtr2z2
-        vesc = root2 * ((1. * (rad**2))**(-0.25))
+        vesc = root2 * ((1. + (rad**2))**(-0.25))
         DO
             ! This will run continuously until a certain condition is met (this avoids having to use GOTO)
             CALL RANDOM_NUMBER(ranNum)
