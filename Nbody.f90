@@ -37,7 +37,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     DOUBLE PRECISION :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     DOUBLE PRECISION :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     DOUBLE PRECISION :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
-    DOUBLE PRECISION :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n)
+    DOUBLE PRECISION :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist
 
     ! Variable definitions:
     ! n - number of objects
@@ -86,6 +86,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! eta - accuracy parameter. Optimal timestep lengths are scaled by SQRT(eta)
     ! origDists - distances from the origin
     ! vmags - velocity magnitudes
+    ! closest - array that stores the distance to the nearest other object and the ID of that object (which is just the index of that object in the pos array)
+    ! closestDist - keeps track of the distance to the nearest other object out of those checked so far
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
     OPEN(7, file='xpositions.txt', status='replace')
@@ -96,7 +98,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     OPEN(12, file='zvelocities.txt', status='replace')
     OPEN(13, file='origin_dists.txt', status='replace')
     OPEN(14, file='velocity_magnitudes.txt', status='replace')
-    OPEN(15, file='energy_error.txt', status='replace')
+    OPEN(15, file='closest_objects.txt', status='replace')
+    OPEN(16, file='energy_error.txt', status='replace')
 
 
 
@@ -109,7 +112,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! Adjustable values
     tLim = 2.e7 / tunit
     tWrite = 1.e5 / tunit
-    eta = 1.e-11
+    eta = 1.e-12
 
     ! Set up initial conditions
     IF (initialConditions == 2) THEN
@@ -157,8 +160,6 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     
     E0 = Ek + Ep
 
-    ! Writing initial conditions to files
-
     DO i=1,n
         ! Getting distances from origin and velocity magnitudes
         dist2 = 0. ! Need to reset to zero for each new i
@@ -171,7 +172,26 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         vmags(i) = SQRT(vmag2)
     END DO
 
-        
+    DO i=1,n
+        ! Finding the closest other object to each object
+        closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+        DO j=1,n
+            IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
+            dist2 = 0. ! Reset for each j
+            DO k=1,ndims
+                dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+            END DO
+            dist = SQRT(dist2)
+            IF (dist<closestDist) THEN
+                closest(1,i) = j ! Index of the current closest object to object i
+                closest(2,i) = dist
+                closestDist = dist ! The closest distance to object i should now be dist
+            END IF
+        END DO
+    END DO
+
+
+    ! Writing initial conditions to files 
     WRITE(7,*) pos(1,:)
     WRITE(8,*) pos(2,:)
     WRITE(9,*) pos(3,:)
@@ -180,7 +200,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     WRITE(12,*) vel(3,:)*vunit
     WRITE(13,*) origDists(:)
     WRITE(14,*) vmags(:)*vunit
-    WRITE(15,*) Eerr, t*tunit ! Note that Eerr and t*tunit will both be zero here. They are included so that all output files have the same number of lines
+    WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
+    WRITE(16,*) Eerr, t*tunit ! Note that Eerr and t*tunit will both be zero here. They are included so that all output files have the same number of lines
 
     ! t and tcount need to be zero at the start of the simulation
     t = 0.
@@ -334,6 +355,24 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 vmags(i) = SQRT(vmag2)
             END DO
 
+            DO i=1,n
+                ! Finding the closest other object to each object
+                closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+                DO j=1,n
+                    IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
+                    dist2 = 0. ! Reset for each j
+                    DO k=1,ndims
+                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                    END DO
+                    dist = SQRT(dist2)
+                    IF (dist<closestDist) THEN
+                        closest(1,i) = j ! Index of the current closest object to object i
+                        closest(2,i) = dist
+                        closestDist = dist ! The closest distance to object i should now be dist
+                    END IF
+                END DO
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -343,7 +382,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             WRITE(12,*) vel(3,:)*vunit
             WRITE(13,*) origDists(:)
             WRITE(14,*) vmags(:)*vunit
-            WRITE(15,*) Eerr, t*tunit
+            WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
+            WRITE(16,*) Eerr, t*tunit
             EXIT
         END IF
 
@@ -362,6 +402,24 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 vmags(i) = SQRT(vmag2)
             END DO
 
+            DO i=1,n
+                ! Finding the closest other object to each object
+                closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+                DO j=1,n
+                    IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
+                    dist2 = 0. ! Reset for each j
+                    DO k=1,ndims
+                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                    END DO
+                    dist = SQRT(dist2)
+                    IF (dist<closestDist) THEN
+                        closest(1,i) = j ! Index of the current closest object to object i
+                        closest(2,i) = dist
+                        closestDist = dist ! The closest distance to object i should now be dist
+                    END IF
+                END DO
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -371,7 +429,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             WRITE(12,*) vel(3,:)*vunit
             WRITE(13,*) origDists(:)
             WRITE(14,*) vmags(:)*vunit
-            WRITE(15,*) Eerr, t*tunit
+            WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
+            WRITE(16,*) Eerr, t*tunit
             EXIT
 
         ELSE IF (tcount >= tWrite) THEN
@@ -388,6 +447,24 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 vmags(i) = SQRT(vmag2)
             END DO
 
+            DO i=1,n
+                ! Finding the closest other object to each object
+                closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+                DO j=1,n
+                    IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
+                    dist2 = 0. ! Reset for each j
+                    DO k=1,ndims
+                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                    END DO
+                    dist = SQRT(dist2)
+                    IF (dist<closestDist) THEN
+                        closest(1,i) = j ! Index of the current closest object to object i
+                        closest(2,i) = dist
+                        closestDist = dist ! The closest distance to object i should now be dist
+                    END IF
+                END DO
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -397,7 +474,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             WRITE(12,*) vel(3,:)*vunit
             WRITE(13,*) origDists(:)
             WRITE(14,*) vmags(:)*vunit
-            WRITE(15,*) Eerr, t*tunit
+            WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
+            WRITE(16,*) Eerr, t*tunit
             tcount = tcount - tWrite ! Not just resetting tcount to zero because this could cause the file outputs to drift from the intended times over the course
                                      ! of the simulation. Subtracting twrite keeps the file outputs at times as close to multiples of twrite as possible
         END IF
