@@ -37,7 +37,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     DOUBLE PRECISION :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     DOUBLE PRECISION :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     DOUBLE PRECISION :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
-    DOUBLE PRECISION :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist
+    DOUBLE PRECISION :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist, closeThreshold
 
     ! Variable definitions:
     ! n - number of objects
@@ -88,6 +88,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! vmags - velocity magnitudes
     ! closest - array that stores the distance to the nearest other object and the ID of that object (which is just the index of that object in the pos array)
     ! closestDist - keeps track of the distance to the nearest other object out of those checked so far
+    ! closeThreshold - maximum distance between two objects for something to be considered a "close encounter"
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
     OPEN(7, file='xpositions.txt', status='replace')
@@ -100,6 +101,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     OPEN(14, file='velocity_magnitudes.txt', status='replace')
     OPEN(15, file='closest_objects.txt', status='replace')
     OPEN(16, file='energy_error.txt', status='replace')
+    OPEN(17, file='close_encounters.txt', status='replace') ! Format of this will be "object i, object j, distance, time)
 
 
 
@@ -107,12 +109,13 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     recip6 = 1./6.
     recip24 = 1./24.
     recip120 = 1./120.
-    EerrLim = 1.e-5
 
     ! Adjustable values
     tLim = 2.e7 / tunit
     tWrite = 1.e5 / tunit
     eta = 1.e-12
+    EerrLim = 1.e-5
+    closeThreshold = 1.e-4
 
     ! Set up initial conditions
     IF (initialConditions == 2) THEN
@@ -148,13 +151,22 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             vmag2 = vmag2 + (vel(k,i)**2)
         END DO
         Ek = Ek + (0.5 * m(i) * vmag2)
+    END DO
 
+    DO i=1,n-1
         DO j=i+1,n ! These boundaries avoid double-counting pairs of objects
             dist2 = 0. ! Need to reset to zero for each new j
             DO k=1,ndims
                 dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
             END DO
-            Ep = Ep - ((m(i) * m(j)) / SQRT(dist2))
+            dist = SQRT(dist2)
+            Ep = Ep - ((m(i) * m(j)) / dist)
+
+            ! Checking for a close encounter - this fits nicely into the energy calculation as it would also ideally avoid double-counting pairs of objects
+            IF (dist <= closeThreshold) THEN
+                WRITE(17,*) i, j, dist, t*tunit
+            END IF
+            
         END DO
     END DO
     
@@ -326,13 +338,22 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 vmag2 = vmag2 + (vel(k,i)**2)
             END DO
             Ek = Ek + (0.5 * m(i) * vmag2)
+        END DO
 
+        DO i=1,n-1
             DO j=i+1,n
                 dist2 = 0.
                 DO k=1,ndims
                     dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
                 END DO
-                Ep = Ep - ((m(i) * m(j)) / SQRT(dist2))
+                dist = SQRT(dist2)
+                Ep = Ep - ((m(i) * m(j)) / dist)
+
+                ! Checking for a close encounter - this fits nicely into the energy calculation as it would also ideally avoid double-counting pairs of objects
+                IF (dist <= closeThreshold) THEN
+                    WRITE(17,*) i, j, dist, t*tunit
+                END IF
+
             END DO
         END DO
         
