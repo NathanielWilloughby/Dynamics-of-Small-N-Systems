@@ -33,7 +33,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
     DOUBLE PRECISION, INTENT(IN) :: tunit, vunit
-    INTEGER :: i, j, k, count
+    INTEGER :: i, j, k, count, encounters(1:n, 1:n)
     DOUBLE PRECISION :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     DOUBLE PRECISION :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     DOUBLE PRECISION :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
@@ -49,6 +49,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! j - iteration variable used when looping over pairs of objects
     ! k - iteration variable used when looping over dimensions
     ! count - debug variable that tracks the current timestep number
+    ! encounters - 2D array in which every entry corresponds to a pair of objects. Stores a 1 if these objects are currently in a close encounter, stores a zero otherwise
+    ! Note that around half of the encounters array is redundant as it will be symmetrical, but I am leaving it as an n x n array for ease of coding
     ! t - current simulation time
     ! tcount - time since previous file write (not exactly, since file writes are followed by tcount = tcount - tWrite rather than tcount = 0.)
     ! tLim - simulation time limit
@@ -111,11 +113,11 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     recip120 = 1./120.
 
     ! Adjustable values
-    tLim = 2.e7 / tunit
+    tLim = 1.e8 / tunit
     tWrite = 1.e5 / tunit
     eta = 1.e-12
     EerrLim = 1.e-5
-    closeThreshold = 1.e-4
+    closeThreshold = 1.e-3
 
     ! Set up initial conditions
     IF (initialConditions == 2) THEN
@@ -145,6 +147,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! Initial total energy
     Ek = 0. ! Ek is assumed to be zero before the following code begins to run
     Ep = 0. ! Ep is assumed to be zero before the following code begins to run
+    encounters = 0 ! The following code assumes this is the case before it is run
     DO i=1,n
         vmag2 = 0. ! Need to reset to zero for each new i
         DO k=1,ndims
@@ -164,9 +167,9 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
             ! Checking for a close encounter - this fits nicely into the energy calculation as it would also ideally avoid double-counting pairs of objects
             IF (dist <= closeThreshold) THEN
+                encounters(i,j) = 1
                 WRITE(17,*) i, j, dist, t*tunit
-            END IF
-            
+            END IF ! Don't need to check whether the two objects are already in an encounter here as this runs at t=0, meaning everything in encounters will be zero anyway   
         END DO
     END DO
     
@@ -341,8 +344,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         END DO
 
         DO i=1,n-1
-            DO j=i+1,n
-                dist2 = 0.
+            DO j=i+1,n ! These boundaries avoid double-counting pairs of objects
+                dist2 = 0. ! Need to reset to zero for each new j
                 DO k=1,ndims
                     dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
                 END DO
@@ -351,9 +354,18 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
                 ! Checking for a close encounter - this fits nicely into the energy calculation as it would also ideally avoid double-counting pairs of objects
                 IF (dist <= closeThreshold) THEN
-                    WRITE(17,*) i, j, dist, t*tunit
+                    IF (encounters(i,j)==0) THEN
+                        encounters(i,j) = 1
+                        WRITE(17,*) i, j, dist, t*tunit
+                    END IF
+            
+                ELSE
+                    IF (encounters(i,j)==1) THEN
+                        encounters(i,j) = 0
+                        WRITE(17,*) i, j, dist, t*tunit ! This is technically after the encounter ends but it feels easier to code it this way. I may change it in the future
+                    END IF
                 END IF
-
+            
             END DO
         END DO
         
