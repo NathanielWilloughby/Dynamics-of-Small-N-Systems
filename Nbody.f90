@@ -311,7 +311,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         END DO
 
 
-        ! Position and velocity corrections. This COULD be including in the previous DO loop after cycling through all j's for a given i as the snap/crackle
+        ! Position and velocity corrections. This COULD be included in the previous DO loop after cycling through all j's for a given i as the snap/crackle
         ! calculations in the actual loop do not involve the predicted positions/velocities of the relevant objects (the contributions of the predicted positions/velocities
         ! are contained within accPred and jrkPred, which were calculated beforehand). Updating the positions and velocities during the same DO loop as
         ! the snaps and crackles are esimated shouldn't affect the snap and crackle estimations, and won't have any effect on the calculated positions and velocities
