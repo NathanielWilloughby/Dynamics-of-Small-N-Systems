@@ -1,22 +1,23 @@
 ! Main program - automates multiple N-body simulations
 PROGRAM n_body_master
     IMPLICIT NONE
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER :: nsims, i
-    DOUBLE PRECISION :: munit, runit, vunit, tunit
+    REAL(dp) :: munit, runit, vunit, tunit
 
     ! Some adjustable values
     nsims = 1 ! Number of simulations to run
-    munit = 1.99e30 ! Equal to one N-body mass unit (which is currently set to one solar mass)
-    runit = 3.086e16 ! Equal to one N-body length unit (which is currently set to one parsec)
+    munit = 1.99e30_dp ! Equal to one N-body mass unit (which is currently set to one solar mass)
+    runit = 3.086e16_dp ! Equal to one N-body length unit (which is currently set to one parsec)
 
-    ! Get velocity unit in km/s and time unit in years
+    ! Get velocity unit in km/s and time unit in Myr
     CALL n_body_conversion(munit, runit, tunit, vunit)
 
     ! Run N-body simulations by repeatedly calling n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! n - number of objects
     ! ndims - number of dimensions (probably should always be 3)
     ! initialConditions - an integer used to determine which setup subroutine to use
-    ! tunit - N-body time unit in years
+    ! tunit - N-body time unit in Myr
     ! vunit - N-body velocity unit in km/s
     ! Currently available initial conditions are:
     ! 1 - Plummer sphere
@@ -31,13 +32,15 @@ END PROGRAM n_body_master
 ! One full simulation
 SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     IMPLICIT NONE
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
-    DOUBLE PRECISION, INTENT(IN) :: tunit, vunit
+    REAL(dp), INTENT(IN) :: tunit, vunit
     INTEGER :: i, j, k, count, encounters(1:n, 1:n)
-    DOUBLE PRECISION :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
-    DOUBLE PRECISION :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
-    DOUBLE PRECISION :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
-    DOUBLE PRECISION :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist, closeThreshold
+    REAL(dp) :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
+    REAL(dp) :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, jmag2, smag2, cmag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
+    REAL(dp):: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
+    REAL(dp) :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist, closeThreshold
+    REAL(dp) :: desiredVirRat, virRat
 
     ! Variable definitions:
     ! n - number of objects
@@ -72,6 +75,9 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! dv - difference in velocity between two objects (vel_i - vel_j)
     ! vmag2 - velocity magnitude squared (vel . vel)
     ! amag2 - acceleration magnitude squared (acc . acc)
+    ! jmag2 - jerk magnitude squared (jrk . jrk)
+    ! smag2 - snap magnitude squared (snp . snp)
+    ! cmag2 - crackle magnitude squared (crk . crk)
     ! vdotr - dv . dr
     ! mTot - total mass of all objects
     ! m - mass of each object
@@ -91,6 +97,9 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! closest - array that stores the distance to the nearest other object and the ID of that object (which is just the index of that object in the pos array)
     ! closestDist - keeps track of the distance to the nearest other object out of those checked so far
     ! closeThreshold - maximum distance between two objects for something to be considered a "close encounter"
+    ! desiredVirRat - Desired virial ratio - may make this a parameter for this subroutine in the future
+    ! virRat - Actual virial ratio (at t=0 before the velocities are scaled to make the actual virial ratio equal to the desired virial ratio)
+
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
     OPEN(7, file='xpositions.txt', status='replace')
@@ -108,16 +117,17 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
 
     ! Constants:
-    recip6 = 1./6.
-    recip24 = 1./24.
-    recip120 = 1./120.
+    recip6 = 1._dp/6._dp
+    recip24 = 1._dp/24._dp
+    recip120 = 1._dp/120._dp
 
     ! Adjustable values
-    tLim = 1.e8 / tunit
-    tWrite = 1.e5 / tunit
-    eta = 1.e-12
-    EerrLim = 1.e-5
-    closeThreshold = 1.e-3
+    tLim = 1.e2_dp / tunit
+    tWrite = 1.e-1_dp / tunit
+    eta = 1.e-6_dp
+    EerrLim = 1.e-5_dp
+    closeThreshold = 1.e-3_dp
+    desiredVirRat = 1._dp
 
     ! Set up initial conditions
     IF (initialConditions == 2) THEN
@@ -127,9 +137,9 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     END IF
 
     ! Conversion to COM frame
-    mTot = 0. ! mTot is assumed to be zero before the following code begins to run
-    comPos = 0. ! comPos is assumed to be zero before the following code begins to run
-    comVel = 0. ! comVel is assumed to be zero before the following code begins to run
+    mTot = 0._dp ! mTot is assumed to be zero before the following code begins to run
+    comPos = 0._dp ! comPos is assumed to be zero before the following code begins to run
+    comVel = 0._dp ! comVel is assumed to be zero before the following code begins to run
     DO i=1,n
         mTot = mTot + m(i)
         comPos(:) = comPos(:) + (m(i) * pos(:,i))
@@ -145,20 +155,20 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     END DO
 
     ! Initial total energy
-    Ek = 0. ! Ek is assumed to be zero before the following code begins to run
-    Ep = 0. ! Ep is assumed to be zero before the following code begins to run
+    Ek = 0._dp ! Ek is assumed to be zero before the following code begins to run
+    Ep = 0._dp ! Ep is assumed to be zero before the following code begins to run
     encounters = 0 ! The following code assumes this is the case before it is run
     DO i=1,n
-        vmag2 = 0. ! Need to reset to zero for each new i
+        vmag2 = 0._dp ! Need to reset to zero for each new i
         DO k=1,ndims
             vmag2 = vmag2 + (vel(k,i)**2)
         END DO
-        Ek = Ek + (0.5 * m(i) * vmag2)
+        Ek = Ek + (0.5_dp * m(i) * vmag2)
     END DO
 
     DO i=1,n-1
         DO j=i+1,n ! These boundaries avoid double-counting pairs of objects
-            dist2 = 0. ! Need to reset to zero for each new j
+            dist2 = 0._dp ! Need to reset to zero for each new j
             DO k=1,ndims
                 dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
             END DO
@@ -173,12 +183,26 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         END DO
     END DO
     
+    ! Scaling velocities to make the virial ratio of the system be equal to the desired value
+    virRat = (2._dp * Ek) / ABS(Ep)
+    vel(:,:) = vel(:,:) * SQRT(desiredVirRat / virRat)
+
+    ! Recalculating kinetic energy
+    Ek = 0._dp
+    DO i=1,n
+        vmag2 = 0._dp
+        DO k=1,ndims
+            vmag2 = vmag2 + (vel(k,i)**2)
+        END DO
+        Ek = Ek + (0.5_dp * m(i) * vmag2)
+    END DO
+
     E0 = Ek + Ep
 
     DO i=1,n
         ! Getting distances from origin and velocity magnitudes
-        dist2 = 0. ! Need to reset to zero for each new i
-        vmag2 = 0. ! Need to reset to zero for each new i
+        dist2 = 0._dp ! Need to reset to zero for each new i
+        vmag2 = 0._dp ! Need to reset to zero for each new i
         DO k=1,ndims
             dist2 = dist2 + (pos(k,i)**2)
             vmag2 = vmag2 + (vel(k,i)**2)
@@ -189,7 +213,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
     DO i=1,n
         ! Finding the closest other object to each object
-        closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+        closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
         DO j=1,n
             IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
             dist2 = 0. ! Reset for each j
@@ -219,25 +243,24 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     WRITE(16,*) Eerr, t*tunit ! Note that Eerr and t*tunit will both be zero here. They are included so that all output files have the same number of lines
 
     ! t and tcount need to be zero at the start of the simulation
-    t = 0.
-    tcount = 0.
+    t = 0._dp
+    tcount = 0._dp
 
     count = 0 ! Set to zero before the first timestep, but increase by 1 at the start of every timestep
     ! Main loop
     DO
         count = count + 1 ! Tracking the current timestep number
 
-        acc = 0. ! Needs to be reset to zero for each new timestep
-        jrk = 0. ! Needs to be reset to zero for each new timestep
+        acc = 0._dp ! Needs to be reset to zero for each new timestep
+        jrk = 0._dp ! Needs to be reset to zero for each new timestep
         ! Other variables also need to be reset to zero, but this will occur later in the timestep when those variables are actually needed
 
-        ! Accelerations, jerks and adaptive timestep length
+        ! Accelerations and jerks
         DO i=1,n
-            amag2 = 0. ! Needs to be reset to zero for each new i
             DO j=1,n
                 IF (i==j) CYCLE ! A given object is unaffected by its own gravity
-                dist2 = 0. ! Needs to be reset to zero for each new j
-                vdotr = 0. ! Needs to be reset to zero for each new j
+                dist2 = 0._dp ! Needs to be reset to zero for each new j
+                vdotr = 0._dp ! Needs to be reset to zero for each new j
                 dr(:) = pos(:,i) - pos(:,j)
                 dv(:) = vel(:,i) - vel(:,j)
                 DO k=1,ndims
@@ -249,19 +272,29 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 dist5 = dist**5
                 acc(:,i) = acc(:,i) - ((m(j) * dr(:)) / dist3)
                 jrk(:,i) = jrk(:,i) + (m(j) * ((dv(:) / dist3) - ((3. * vdotr * dr(:)) / dist5)))
+            END DO
+        END DO
+
+        ! The optimal timestep length for a given object depends on its acceleration, jerk, snap and crackle
+        ! The timestep length is needed before the snap and crackle are calculated, so for most timesteps the timestep length will use the optimal values from
+        ! the previous timestep. However, this would not work for the first timestep so a simpler equation that just involves the acceleration will be used on the first
+        ! timestep. The following IF statement will only run on the first timestep.
+        IF (count==1) THEN
+            DO i=1,n
+                amag2 = 0._dp ! Needs to be reset to zero for each i
                 DO k=1,ndims
                     amag2 = amag2 + (acc(k,i)**2)
                 END DO
+                dtOpt(i) = SQRT(eta / amag2)
             END DO
-            dtOpt(i) = SQRT(eta / amag2)
-        END DO
-        dt = MINVAL(dtOpt)
-        dt2 = dt**2
-        dt3 = dt**3
-        dt4 = dt**4
-        dt5 = dt**5
-        recipdt2 = 1./dt2
-        recipdt3 = 1./dt3
+            dt = MINVAL(dtOpt)
+            dt2 = dt**2
+            dt3 = dt**3
+            dt4 = dt**4
+            dt5 = dt**5
+            recipdt2 = 1._dp/dt2
+            recipdt3 = 1._dp/dt3
+        END IF
 
         ! Predicted end-of-timestep positions and velocities (before snap and crackle are accounted for)
         ! Note that the predicted positions and velocities do NOT need to be in separate arrays to the pre-timestep positions and celocities, as the
@@ -275,14 +308,14 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         ! Predicted accelerations and jerks at the predicted positions and velocities
         ! Note that the predicted accelerations and jerks DO need separate arrays to the accelerations and jerks used in predicting the end-of-timestep positions
         ! and velocities, as both pairs of accelerations and jerks are needed to estimate the snaps and crackles
-        accPred = 0. ! Needs to be reset to zero in every timestep
-        jrkPred = 0. ! Needs to be reset to zero in every timestep
+        accPred = 0._dp ! Needs to be reset to zero in every timestep
+        jrkPred = 0._dp ! Needs to be reset to zero in every timestep
         DO i=1,n
             ! amag2 does not need to be reset to zero as it is not used in this loop
             DO j=1,n
                 IF (i==j) CYCLE
-                dist2 = 0.
-                vdotr = 0.
+                dist2 = 0._dp
+                vdotr = 0._dp
                 dr(:) = pos(:,i) - pos(:,j)
                 dv(:) = vel(:,i) - vel(:,j)
                 DO k=1,ndims
@@ -299,14 +332,14 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
         ! Estimating the snap and crackle of each object. This is in a separate DO loop to the calculation of accPred and jrkPred because the estimation of the
         ! snap and crackle for a given object requires knowledge of accPred and jrkPred for all other objects
-        snp = 0. ! Needs to be reset to zero in every timestep
-        crk = 0. ! Needs to be reset to zero in every timestep
+        snp = 0._dp ! Needs to be reset to zero in every timestep
+        crk = 0._dp ! Needs to be reset to zero in every timestep
         DO i=1,n
             DO j=1,n
                 IF (i==j) CYCLE
                 ! Note that the subtraction in the snap estimation is outside the parentheses so the jerk term is added rather than subtracted
-                snp(:,i) = snp(:,i) - (recipdt2 * ((6. * (acc(:,j) - accPred(:,j))) + (dt * ((4. * jrk(:,j)) + (2. * jrkPred(:,j))))))
-                crk(:,i) = crk(:,i) + (recipdt3 * ((12. * (acc(:,j) - accPred(:,j))) + (6. * dt * (jrk(:,j) + jrkPred(:,j)))))
+                snp(:,i) = snp(:,i) - (recipdt2 * ((6._dp * (acc(:,j) - accPred(:,j))) + (dt * ((4._dp * jrk(:,j)) + (2._dp * jrkPred(:,j))))))
+                crk(:,i) = crk(:,i) + (recipdt3 * ((12._dp * (acc(:,j) - accPred(:,j))) + (6._dp * dt * (jrk(:,j) + jrkPred(:,j)))))
             END DO
         END DO
 
@@ -327,25 +360,51 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         ! Time incrementation
         t = t + dt
         tcount = tcount + dt
+        
+        ! Calculating the next timestep length. This will be done every timestep, so the first timestep will have two timestep length calculations (one to calculate
+        ! its own timestep length, and one to calculate the length of timestep 2), while all other timesteps will involve one timestep length calculation (to calculate
+        ! the length of the next timestep)
+        DO i=1,n
+            amag2 = 0._dp ! amag2, jmag2, smag2 and cmag2 all need to be reset to zero for each i
+            jmag2 = 0._dp
+            smag2 = 0._dp
+            cmag2 = 0._dp
+            DO k=1,ndims
+                amag2 = amag2 + (acc(k,i)**2)
+                jmag2 = jmag2 + (jrk(k,i)**2)
+                smag2 = smag2 + (snp(k,i)**2)
+                cmag2 = cmag2 + (crk(k,i)**2)
+            END DO
+            dtOpt(i) = eta * (SQRT(amag2 * smag2) + jmag2) ! Splitting this calculation over multiple lines to make it easier to read
+            dtOpt(i) = dtOpt(i) / (SQRT(jmag2 * cmag2) + smag2)
+            dtOpt(i) = SQRT(dtOpt(i))
+        END DO
+        dt = MINVAL(dtOpt)
+        dt2 = dt**2
+        dt3 = dt**3
+        dt4 = dt**4
+        dt5 = dt**5
+        recipdt2 = 1._dp/dt2
+        recipdt3 = 1._dp/dt3
 
         ! Checking energy error (this should be done every timestep because the code should stop running if the energy error gets too large)
         ! The outputs from before the energy error exceeds the limit are fine to keep, but anything after the energy error exceeds the limit should be discarded
         ! so time is saved by just ending the simulation if the energy error exceeds the limit. Data will be written to the files for the timestep in which the energy
         ! error becomes too large because it could be useful to see if the outputs give some insight as to why the energy error became so large (especially if it is sudden)
-        Ek = 0. ! Needs to be reset to zero in every timestep
-        Ep = 0. ! Needs to be reset to zero in every timestep
+        Ek = 0._dp ! Needs to be reset to zero in every timestep
+        Ep = 0._dp ! Needs to be reset to zero in every timestep
 
         DO i=1,n
-            vmag2 = 0.
+            vmag2 = 0._dp
             DO k=1,ndims
                 vmag2 = vmag2 + (vel(k,i)**2)
             END DO
-            Ek = Ek + (0.5 * m(i) * vmag2)
+            Ek = Ek + (0.5_dp * m(i) * vmag2)
         END DO
 
         DO i=1,n-1
             DO j=i+1,n ! These boundaries avoid double-counting pairs of objects
-                dist2 = 0. ! Need to reset to zero for each new j
+                dist2 = 0._dp ! Need to reset to zero for each new j
                 DO k=1,ndims
                     dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
                 END DO
@@ -378,8 +437,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
             DO i=1,n
                 ! Getting distances from origin and velocity magnitudes
-                dist2 = 0. ! Need to reset to zero for each new i
-                vmag2 = 0. ! Need to reset to zero for each new i
+                dist2 = 0._dp ! Need to reset to zero for each new i
+                vmag2 = 0._dp ! Need to reset to zero for each new i
                 DO k=1,ndims
                     dist2 = dist2 + (pos(k,i)**2)
                     vmag2 = vmag2 + (vel(k,i)**2)
@@ -390,10 +449,10 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
             DO i=1,n
                 ! Finding the closest other object to each object
-                closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+                closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
                 DO j=1,n
                     IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
-                    dist2 = 0. ! Reset for each j
+                    dist2 = 0._dp ! Reset for each j
                     DO k=1,ndims
                         dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
                     END DO
@@ -420,13 +479,12 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             EXIT
         END IF
 
-        ! File writes
         IF (t >= tLim) THEN ! This takes priority over the coundition (tcount >= tWrite) in the event that both are satisfied
 
             DO i=1,n
                 ! Getting distances from origin and velocity magnitudes
-                dist2 = 0. ! Need to reset to zero for each new i
-                vmag2 = 0. ! Need to reset to zero for each new i
+                dist2 = 0._dp ! Need to reset to zero for each new i
+                vmag2 = 0._dp ! Need to reset to zero for each new i
                 DO k=1,ndims
                     dist2 = dist2 + (pos(k,i)**2)
                     vmag2 = vmag2 + (vel(k,i)**2)
@@ -437,10 +495,10 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
             DO i=1,n
                 ! Finding the closest other object to each object
-                closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+                closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
                 DO j=1,n
                     IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
-                    dist2 = 0. ! Reset for each j
+                    dist2 = 0._dp ! Reset for each j
                     DO k=1,ndims
                         dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
                     END DO
@@ -470,8 +528,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
             DO i=1,n
                 ! Getting distances from origin and velocity magnitudes
-                dist2 = 0. ! Need to reset to zero for each new i
-                vmag2 = 0. ! Need to reset to zero for each new i
+                dist2 = 0._dp ! Need to reset to zero for each new i
+                vmag2 = 0._dp ! Need to reset to zero for each new i
                 DO k=1,ndims
                     dist2 = dist2 + (pos(k,i)**2)
                     vmag2 = vmag2 + (vel(k,i)**2)
@@ -482,10 +540,10 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
             DO i=1,n
                 ! Finding the closest other object to each object
-                closestDist = 99999. ! Make this arbitrarily large at the start of each loop
+                closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
                 DO j=1,n
                     IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
-                    dist2 = 0. ! Reset for each j
+                    dist2 = 0._dp ! Reset for each j
                     DO k=1,ndims
                         dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
                     END DO
@@ -519,21 +577,20 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     
 END SUBROUTINE n_body_simulation
 
-! Gives the N-body velocity unit in km/s and the time unit in years
+! Gives the N-body velocity unit in km/s and the time unit in Myr
 SUBROUTINE n_body_conversion(munit, runit, tunit, vunit)
     IMPLICIT NONE
-    DOUBLE PRECISION, INTENT(IN) :: munit, runit
-    DOUBLE PRECISION, INTENT(OUT) :: tunit, vunit
-    DOUBLE PRECISION :: G, year
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
+    REAL(dp), INTENT(IN) :: munit, runit
+    REAL(dp), INTENT(OUT) :: tunit, vunit
+    REAL(dp) :: G, year
 
-    G = 6.67e-11 ! Gravitational constant in SI units
-    year = 365.24 * 86400. ! 86400 seconds in a day, 365.24 days in a year
-    tunit = SQRT((runit**3) / (G * munit)) / year ! N-body time unit in years
-    vunit = runit / (1.e3 * tunit * year)
-    
-    
-    
-    ! N-body velocity unit in km/s (the factor of 1.e3 on the denominator converts from m/s to km/s)
+    G = 6.67e-11_dp ! Gravitational constant in SI units
+    year = 365.24_dp * 86400._dp ! 86400 seconds in a day, 365.24 days in a year
+    tunit = SQRT((runit**3) / (G * munit)) / (1.e6_dp * year) ! N-body time unit in Myr (should be about 14.9 Myr)
+    vunit = runit / (1.e9_dp * tunit * year) ! N-body velocity unit in km/s. 1 vunit should be (1 pc)/(14.9 Myr), or about (6.56e-2 km/s).
+                                             ! The factor of runit/tunit converts from N-body velocity units to m/Myr. The factor of 1/year then converts to m/megasecond.
+                                             ! Finally, the factor of 1.e9_dp on the denominator converts to km/s
 
     RETURN
     
@@ -542,52 +599,55 @@ END SUBROUTINE n_body_conversion
 ! Plummer sphere (3 dimensions only). Method from Aarseth, Hénon and Wielen (1974)
 SUBROUTINE setup_plummer(n, pos, vel, m)
     IMPLICIT NONE
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER, INTENT(IN) :: n
-    INTEGER :: i
-    DOUBLE PRECISION, INTENT(OUT) :: pos(1:3, 1:n), vel(1:3, 1:n), m(1:n)
-    DOUBLE PRECISION :: ranNum, ranNum2, twopi, twothirds, rad, sqrtr2z2, vesc, root2, q2, gq, vmag
+    INTEGER :: i, seed
+    REAL(dp), INTENT(OUT) :: pos(1:3, 1:n), vel(1:3, 1:n), m(1:n)
+    REAL(dp) :: ranNum, ranNum2, twopi, twothirds, rad, sqrtr2z2, vesc, root2, q2, gq, vmag
+    DOUBLE PRECISION :: ran3
 
 
-    twopi = 8. * ATAN(1.)   ! 2 * pi
-    ranNum = 0.             ! Random number in a uniform distribution between 0 and 1
-    ranNum2 = 0.            ! Another random number in a uniform distribution between 0 and 1, used when a new random number needs to be generated while the value stored
-                            ! in ranNum is also still needed
-    twothirds = 2./3.       ! 2/3
-    rad = 0.                ! Distance of a given object from the origin. Not an array as the generation of initial conditions for a given object only needs the value
-                            ! of rad for the object itself
-    sqrtr2z2 = 0.           ! SQRT(r^2 - z^2). Also stores SQRT(v^2 - v_z^2) as this is value is only needed for a given object once SQRT(r^2 - z^2) is no longer needed
-    vesc = 0.               ! Escape velocity at a given object's position, which represents the maximum 'allowed' velocity at that position. Not an array for the same
-                            ! reasons as rad
-    vmag = 0.               ! Velocity magnitude of a given object. Not an array for the same reasons as rad
-    q2 = 0.                 ! q^2, where q = vmag/vesc
-    gq = 0.                 ! g(q) = q^2 - (1-q^2)^7/2
-    root2 = SQRT(2.)        ! Square root of 2
+    seed = 242134               ! Seed for the pseudo-random number generator
+    twopi = 8._dp * ATAN(1._dp) ! 2 * pi
+    ranNum = 0._dp              ! Random number in a uniform distribution between 0 and 1
+    ranNum2 = 0._dp             ! Another random number in a uniform distribution between 0 and 1, used when a new random number needs to be generated while the value stored
+                                ! in ranNum is also still needed
+    twothirds = 2._dp/3._dp     ! 2/3
+    rad = 0._dp                 ! Distance of a given object from the origin. Not an array as the generation of initial conditions for a given object only needs the value
+                                ! of rad for the object itself
+    sqrtr2z2 = 0._dp            ! SQRT(r^2 - z^2). Also stores SQRT(v^2 - v_z^2) as this is value is only needed for a given object once SQRT(r^2 - z^2) is no longer needed
+    vesc = 0._dp                ! Escape velocity at a given object's position, which represents the maximum 'allowed' velocity at that position. Not an array for the same
+                                ! reasons as rad
+    vmag = 0._dp                ! Velocity magnitude of a given object. Not an array for the same reasons as rad
+    q2 = 0._dp                  ! q^2, where q = vmag/vesc
+    gq = 0._dp                  ! g(q) = q^2 - (1-q^2)^7/2
+    root2 = SQRT(2._dp)         ! Square root of 2
 
-    m = 1. ! All objects will be 1 solar mass (for now)
+    m = 1._dp ! All objects will be 1 solar mass (for now)
     DO i=1,n
-        CALL RANDOM_NUMBER(ranNum)
-        rad = SQRT(1./((ranNum**(-1.*twothirds)) - 1.))
-        CALL RANDOM_NUMBER(ranNum)
-        pos(3,i) = rad * (1. - (2.*ranNum))
-        CALL RANDOM_NUMBER(ranNum) ! Need a different random number for the x and y coordinates to the one used for the z coordinates
+        ranNum = ran3(seed)
+        rad = SQRT(1._dp/((ranNum**(-1._dp*twothirds)) - 1._dp))
+        ranNum = ran3(seed)
+        pos(3,i) = rad * (1._dp - (2._dp*ranNum))
+        ranNum = ran3(seed) ! Need a different random number for the x and y coordinates to the one used for the z coordinates
         sqrtr2z2 = SQRT((rad**2) - (pos(3,i)**2))
         pos(1,i) = COS(twopi * ranNum) * sqrtr2z2
         pos(2,i) = SIN(twopi * ranNum) * sqrtr2z2
-        vesc = root2 * ((1. + (rad**2))**(-0.25))
+        vesc = root2 * ((1._dp + (rad**2))**(-0.25_dp))
         DO
             ! This will run continuously until a certain condition is met (this avoids having to use GOTO)
-            CALL RANDOM_NUMBER(ranNum)
+            ranNum = ran3(seed)
             q2 = ranNum**2
-            gq = q2 * ((1. - q2)**3.5)
-            CALL RANDOM_NUMBER(ranNum2)
-            IF ((0.1 * ranNum2) < gq) THEN
+            gq = q2 * ((1._dp - q2)**3.5_dp)
+            ranNum2 = ran3(seed)
+            IF ((0.1_dp * ranNum2) < gq) THEN
                 EXIT ! This ends the current DO loop (which would otherwise run infinitely)
             END IF
         END DO
         vmag = ranNum * vesc ! Note this uses ranNum, NOT ranNum2
-        CALL RANDOM_NUMBER(ranNum)
-        vel(3,i) = vmag * (1. - (2.*ranNum))
-        CALL RANDOM_NUMBER(ranNum) ! Need a different random number for the x and y velocity components to the one used for the z velocity component
+        ranNum = ran3(seed)
+        vel(3,i) = vmag * (1._dp - (2._dp*ranNum))
+        ranNum = ran3(seed) ! Need a different random number for the x and y velocity components to the one used for the z velocity component
         sqrtr2z2 = SQRT((vmag**2) - (vel(3,i)**2)) ! Reusing this variable name as the value it was set to earlier in the loop is no longer needed at this point
         vel(1,i) = COS(twopi * ranNum) * sqrtr2z2
         vel(2,i) = SIN(twopi * ranNum) * sqrtr2z2
@@ -598,26 +658,70 @@ SUBROUTINE setup_plummer(n, pos, vel, m)
 END SUBROUTINE setup_plummer
 
 SUBROUTINE setup_fig_eight(pos, vel, m)
-    DOUBLE PRECISION, INTENT(OUT) :: pos(1:3, 1:3), vel(1:3, 1:3), m(1:3)
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
+    REAL(dp), INTENT(OUT) :: pos(1:3, 1:3), vel(1:3, 1:3), m(1:3)
 
-    m = 1.
+    m = 1._dp
 
-    pos(1,1) = 0.9700436
-    pos(2,1) = -0.24308753
-    pos(1,2) = -1. * pos(1,1)
-    pos(2,2) = -1. * pos(2,1)
-    pos(1,3) = 0. ! Should already be the case on calling this subroutine, but this line is included on the off chance it isn't the case
-    pos(2,3) = 0. ! See above comment
-    pos(3,:) = 0. ! See comment two lines above
+    pos(1,1) = 0.9700436_dp
+    pos(2,1) = -0.24308753_dp
+    pos(1,2) = -1._dp * pos(1,1)
+    pos(2,2) = -1._dp * pos(2,1)
+    pos(1,3) = 0._dp ! Should already be the case on calling this subroutine, but this line is included on the off chance it isn't the case
+    pos(2,3) = 0._dp ! See above comment
+    pos(3,:) = 0._dp ! See comment two lines above
 
-    vel(1,1) = 0.466203685
-    vel(2,1) = 0.43236573
+    vel(1,1) = 0.466203685_dp
+    vel(2,1) = 0.43236573_dp
     vel(1,2) = vel(1,1)
     vel(2,2) = vel(2,1)
-    vel(1,3) = -2. * vel(1,1)
-    vel(2,3) = -2. * vel(2,1)
-    vel(3,:) = 0. ! Should already be the case on calling this subroutine, but this line is included on the off chance it isn't the case
+    vel(1,3) = -2._dp * vel(1,1)
+    vel(2,3) = -2._dp * vel(2,1)
+    vel(3,:) = 0._dp ! Should already be the case on calling this subroutine, but this line is included on the off chance it isn't the case
 
     RETURN
 
 END SUBROUTINE setup_fig_eight
+
+! Pseudo-random number generator (NOT MY OWN CODE)
+DOUBLE PRECISION FUNCTION RAN3(IDUM)                                   
+  IMPLICIT NONE
+  INTEGER idum,iff,k,i,ii,inext,inextp
+  DOUBLE PRECISION FAC,mbig,mseed,mz,ma,mj,mk
+  PARAMETER (MBIG=4000000., MSEED=1618033., MZ=0., FAC=1./MBIG)
+  DIMENSION MA(55)
+  SAVE
+  DATA IFF/0/
+  IF(IDUM<0 .OR. IFF==0)THEN
+     IFF=1
+     MJ=MSEED-IABS(IDUM)
+     MJ=MOD(MJ,MBIG)
+     MA(55)=MJ
+     MK=1
+     DO 100 I=1,54
+        II=MOD(21*I,55)
+        MA(II)=MK
+        MK=MJ-MK
+        IF(MK.LT.MZ)MK=MK+MBIG
+        MJ=MA(II)
+100     CONTINUE
+        DO 200 K=1,4
+           DO 300 I=1,55
+              MA(I)=MA(I)-MA(1+MOD(I+30,55))
+              IF(MA(I)<MZ)MA(I)=MA(I)+MBIG
+300           CONTINUE
+200           CONTINUE
+              INEXT=0
+              INEXTP=31
+              IDUM=1
+           ENDIF
+           INEXT=INEXT+1
+           IF(INEXT==56)INEXT=1
+           INEXTP=INEXTP+1
+           IF(INEXTP==56)INEXTP=1
+           MJ=MA(INEXT)-MA(INEXTP)
+           IF(MJ<MZ)MJ=MJ+MBIG
+           MA(INEXT)=MJ
+           RAN3=MJ*FAC
+           RETURN
+         END FUNCTION ran3
