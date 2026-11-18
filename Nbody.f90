@@ -35,12 +35,13 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
     REAL(dp), INTENT(IN) :: tunit, vunit
-    INTEGER :: i, j, k, count, encounters(1:n, 1:n)
-    REAL(dp) :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
+    INTEGER :: i, j, k, count, encounters(1:n, 1:n), maxPower, timestepMultipliers(1:n), sync
+    REAL(dp) :: dtBase, t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     REAL(dp) :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, jmag2, smag2, cmag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
-    REAL(dp):: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
+    REAL(dp) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n), endPos(1:ndims, 1:n), endVel(1:ndims, 1:n)
     REAL(dp) :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist, closeThreshold
     REAL(dp) :: desiredVirRat, virRat
+    INTEGER, ALLOCATABLE, DIMENSION(:) :: dtAllowedMultipliers
 
     ! Variable definitions:
     ! n - number of objects
@@ -54,6 +55,10 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! count - debug variable that tracks the current timestep number
     ! encounters - 2D array in which every entry corresponds to a pair of objects. Stores a 1 if these objects are currently in a close encounter, stores a zero otherwise
     ! Note that around half of the encounters array is redundant as it will be symmetrical, but I am leaving it as an n x n array for ease of coding
+    ! maxPower - Limit on how many powers of 2 the timestep length can cover
+    ! timestepMultipliers - timestep length for object i is 2^timesteps(i) * dtBase. Ranges from -maxPower to +maxPower
+    ! sync - number of timesteps between times when ALL possible timestep lengths will be synchronised (will be equal to (2^maxPower)^2)
+    ! dtBase - base (default) timestep length
     ! t - current simulation time
     ! tcount - time since previous file write (not exactly, since file writes are followed by tcount = tcount - tWrite rather than tcount = 0.)
     ! tLim - simulation time limit
@@ -89,6 +94,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! jrk - jerks
     ! snp - snaps
     ! crk - crackles
+    ! endPos - end-of-timestep positions (used for interpolating when handling short-timestep objects)
+    ! endVel - end-of-timestep velocities (used for interpolating when handling short-timestep objects)
     ! accPred - accelerations at predicted end-of-timestep positions and velocities (before accounting for snap and crackle)
     ! jrkPred - jerks at predicted end-of-timestep positions and velocities (before accounting for snap and crackle)
     ! eta - accuracy parameter. Optimal timestep lengths are scaled by SQRT(eta)
@@ -99,6 +106,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! closeThreshold - maximum distance between two objects for something to be considered a "close encounter"
     ! desiredVirRat - Desired virial ratio - may make this a parameter for this subroutine in the future
     ! virRat - Actual virial ratio (at t=0 before the velocities are scaled to make the actual virial ratio equal to the desired virial ratio)
+    ! dtAllowedMultipliers - Allowed timestep length multipliers
 
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
@@ -128,6 +136,16 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     EerrLim = 1.e-5_dp
     closeThreshold = 1.e-3_dp
     desiredVirRat = 1._dp
+    dtBase = 1.e-7_dp ! This value is going to be hardcoded for now, but I may make it able to change based on the initial conditions at some point
+    maxPower = 6
+
+
+    ! Setting up dtAllowedMultipliers
+    ALLOCATE(dtAllowedMultipliers(1:(1 + (2 * maxPower))))
+    DO i=(-1 * maxPower),maxPower
+        dtAllowedMultipliers(i+maxPower+1) = 2 ** i ! i+maxPower+1 should convert to the correct position in the dtAllowed array
+    END DO
+
 
     ! Set up initial conditions
     IF (initialConditions == 2) THEN
@@ -246,8 +264,104 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     t = 0._dp
     tcount = 0._dp
 
+    ! All objects will initially have the same timestep length
+    timestepMultipliers = 0
+
     count = 0 ! Set to zero before the first timestep, but increase by 1 at the start of every timestep
     ! Main loop
+
+    ! Calculating initial optimal timestep lengths based on the accelerations, jerks, snaps and crackles of each object after one base timestep has elapsed
+    ! This is not a "real" timestep, and instead is used to assign initial values to each index in the timesteps array. This should be treated as part of the setup
+    ! Comments will be mostly omitted from this section (except where something is significantly different to the main DO loop)
+    ! See the equivalent parts in the main DO loop for comments
+
+    acc = 0._dp
+    jrk = 0._dp
+    endPos(:,:) = pos(:,:) ! Using endPos and endVel in this section so that the values stored in pos and vel can be kept for the first "real" timestep
+    endVel(:,:) = vel(:,:)
+    DO i=1,n
+        DO j=1,n
+            IF (i==j) CYCLE
+            dist2 = 0._dp
+            vdotr = 0._dp
+            dr(:) = endPos(:,i) - endPos(:,j)
+            dv(:) = endVel(:,i) - endVel(:,j)
+            DO k=1,ndims
+                vdotr = vdotr + (dv(k) * dr(k))
+                dist2 = dist2 + (dr(k)**2)
+            END DO
+            dist = SQRT(dist2)
+            dist3 = dist**3
+            dist5 = dist**5
+            acc(:,i) = acc(:,i) - ((m(j) * dr(:)) / dist3)
+            jrk(:,i) = jrk(:,i) + (m(j) * ((dv(:) / dist3) - ((3._dp * vdotr * dr(:)) / dist5)))
+        END DO
+    END DO
+
+    ! No need to calculate optimal timestep length as this section is assuming that dt=dtBase
+    ! dt4 and dt5 are not needed here as the positions and velocities are not being fully updated since this is not a "real" timestep
+    dt = dtBase
+    dt2 = dt**2
+    dt3 = dt**3
+    recipdt2 = 1._dp/dt2
+    recipdt3 = 1._dp/dt3
+    DO i=1,n
+        endPos(:,i) = endPos(:,i) + (endVel(:,i) * dt) + (0.5 * acc(:,i) * dt2) + (recip6 * jrk(:,i) * dt3)
+        endVel(:,i) = endVel(:,i) + (acc(:,i) * dt) + (0.5 * jrk(:,i) * dt2)
+    END DO
+
+    accPred = 0._dp
+    jrkPred = 0._dp
+    DO i=1,n
+        DO j=1,n
+            IF (i==j) CYCLE
+            dist2 = 0._dp
+            vdotr = 0._dp
+            dr(:) = endPos(:,i) - endPos(:,j)
+            dv(:) = endVel(:,i) - endVel(:,j)
+            DO k=1,ndims
+                vdotr = vdotr + (dv(k) * dr(k))
+                dist2 = dist2 + (dr(k)**2)
+            END DO
+            dist = SQRT(dist2)
+            dist3 = dist**3
+            dist = dist**5
+            accPred(:,i) = accPred(:,i) - ((m(j) * dr(:)) / dist3)
+            jrkPred(:,i) = jrkPred(:,i)+ (m(j) * ((dv(:) / dist3) - ((3._dp * vdotr * dr(:)) / dist5)))
+        END DO
+    END DO
+
+    snp = 0._dp
+    crk = 0._dp
+    DO i=1,n
+        DO j=1,n
+            IF (i==j) CYCLE
+            snp(:,i) = snp(:,i) - (recipdt2 * ((6._dp * (acc(:,j) - accPred(:,j))) + (dt * ((4._dp * jrk(:,j)) + (2._dp * jrkPred(:,j))))))
+            crk(:,i) = crk(:,i) + (recipdt3 * ((12._dp * (acc(:,j) - accPred(:,j))) + (6._dp * dt * (jrk(:,j) + jrkPred(:,j)))))
+        END DO
+    END DO
+
+    ! Do not need to update endPos or endVel here as this is not a "real" timestep
+
+    DO i=1,n
+        amag2 = 0._dp
+        jmag2 = 0._dp
+        smag2 = 0._dp
+        cmag2 = 0._dp
+        DO k=1,ndims
+            amag2 = amag2 + (acc(k,i)**2)
+            jmag2 = jmag2 + (jrk(k,i)**2)
+            smag2 = smag2 + (snp(k,i)**2)
+            cmag2 = cmag2 + (crk(k,i)**2)
+        END DO
+        dtOpt(i) = eta * (SQRT(amag2 * smag2) + jmag2)
+        dtOpt(i) = dtOpt(i) / (SQRT(jmag2 * cmag2) + smag2)
+        dtOpt(i) = SQRT(dtOpt(i))
+        CALL closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt(i), timestepMultipliers(i))
+    END DO
+
+    ! TODO: REWRITE THE MAIN LOOP ACCOUNTING FOR MULTI-PARTICLE TIMESTEPS
+
     DO
         count = count + 1 ! Tracking the current timestep number
 
@@ -255,181 +369,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         jrk = 0._dp ! Needs to be reset to zero for each new timestep
         ! Other variables also need to be reset to zero, but this will occur later in the timestep when those variables are actually needed
 
-        ! Accelerations and jerks
-        DO i=1,n
-            DO j=1,n
-                IF (i==j) CYCLE ! A given object is unaffected by its own gravity
-                dist2 = 0._dp ! Needs to be reset to zero for each new j
-                vdotr = 0._dp ! Needs to be reset to zero for each new j
-                dr(:) = pos(:,i) - pos(:,j)
-                dv(:) = vel(:,i) - vel(:,j)
-                DO k=1,ndims
-                    vdotr = vdotr + (dv(k) * dr(k))
-                    dist2 = dist2 + (dr(k)**2)
-                END DO
-                dist = SQRT(dist2)
-                dist3 = dist**3
-                dist5 = dist**5
-                acc(:,i) = acc(:,i) - ((m(j) * dr(:)) / dist3)
-                jrk(:,i) = jrk(:,i) + (m(j) * ((dv(:) / dist3) - ((3. * vdotr * dr(:)) / dist5)))
-            END DO
-        END DO
 
-        ! The optimal timestep length for a given object depends on its acceleration, jerk, snap and crackle
-        ! The timestep length is needed before the snap and crackle are calculated, so for most timesteps the timestep length will use the optimal values from
-        ! the previous timestep. However, this would not work for the first timestep so a simpler equation that just involves the acceleration will be used on the first
-        ! timestep. The following IF statement will only run on the first timestep.
-        IF (count==1) THEN
-            DO i=1,n
-                amag2 = 0._dp ! Needs to be reset to zero for each i
-                DO k=1,ndims
-                    amag2 = amag2 + (acc(k,i)**2)
-                END DO
-                dtOpt(i) = SQRT(eta / amag2)
-            END DO
-            dt = MINVAL(dtOpt)
-            dt2 = dt**2
-            dt3 = dt**3
-            dt4 = dt**4
-            dt5 = dt**5
-            recipdt2 = 1._dp/dt2
-            recipdt3 = 1._dp/dt3
-        END IF
-
-        ! Predicted end-of-timestep positions and velocities (before snap and crackle are accounted for)
-        ! Note that the predicted positions and velocities do NOT need to be in separate arrays to the pre-timestep positions and celocities, as the
-        ! pre-timestep positions and velocities are not needed for the remainder of the timestep after the predicted positions and velocities have been calculated
-        DO i=1,n
-            pos(:,i) = pos(:,i) + (vel(:,i) * dt) + (0.5 * acc(:,i) * dt2) + (recip6 * jrk(:,i) * dt3)
-            vel(:,i) = vel(:,i) + (acc(:,i) * dt) + (0.5 * jrk(:,i) * dt2) ! Velocity MUST be updated AFTER position, as updating the position requires the
-                                                                           ! pre-timestep velocity
-        END DO
-
-        ! Predicted accelerations and jerks at the predicted positions and velocities
-        ! Note that the predicted accelerations and jerks DO need separate arrays to the accelerations and jerks used in predicting the end-of-timestep positions
-        ! and velocities, as both pairs of accelerations and jerks are needed to estimate the snaps and crackles
-        accPred = 0._dp ! Needs to be reset to zero in every timestep
-        jrkPred = 0._dp ! Needs to be reset to zero in every timestep
-        DO i=1,n
-            ! amag2 does not need to be reset to zero as it is not used in this loop
-            DO j=1,n
-                IF (i==j) CYCLE
-                dist2 = 0._dp
-                vdotr = 0._dp
-                dr(:) = pos(:,i) - pos(:,j)
-                dv(:) = vel(:,i) - vel(:,j)
-                DO k=1,ndims
-                    vdotr = vdotr + (dv(k) * dr(k))
-                    dist2 = dist2 + (dr(k)**2)
-                END DO
-                dist = SQRT(dist2)
-                dist3 = dist**3
-                dist5 = dist**5
-                accPred(:,i) = accPred(:,i) - ((m(j) * dr(:)) / dist3)
-                jrkPred(:,i) = jrkPred(:,i) + (m(j) * ((dv(:) / dist3) - ((3. * vdotr * dr(:)) / dist5)))
-            END DO
-        END DO
-
-        ! Estimating the snap and crackle of each object. This is in a separate DO loop to the calculation of accPred and jrkPred because the estimation of the
-        ! snap and crackle for a given object requires knowledge of accPred and jrkPred for all other objects
-        snp = 0._dp ! Needs to be reset to zero in every timestep
-        crk = 0._dp ! Needs to be reset to zero in every timestep
-        DO i=1,n
-            DO j=1,n
-                IF (i==j) CYCLE
-                ! Note that the subtraction in the snap estimation is outside the parentheses so the jerk term is added rather than subtracted
-                snp(:,i) = snp(:,i) - (recipdt2 * ((6._dp * (acc(:,j) - accPred(:,j))) + (dt * ((4._dp * jrk(:,j)) + (2._dp * jrkPred(:,j))))))
-                crk(:,i) = crk(:,i) + (recipdt3 * ((12._dp * (acc(:,j) - accPred(:,j))) + (6._dp * dt * (jrk(:,j) + jrkPred(:,j)))))
-            END DO
-        END DO
-
-
-        ! Position and velocity corrections. This COULD be included in the previous DO loop after cycling through all j's for a given i as the snap/crackle
-        ! calculations in the actual loop do not involve the predicted positions/velocities of the relevant objects (the contributions of the predicted positions/velocities
-        ! are contained within accPred and jrkPred, which were calculated beforehand). Updating the positions and velocities during the same DO loop as
-        ! the snaps and crackles are esimated shouldn't affect the snap and crackle estimations, and won't have any effect on the calculated positions and velocities
-        ! as long as they are updated AFTER cycling through all j's for a given i. I have decided against putting them in the same DO loop
-        ! in order to make the code easier to follow
-        DO i=1,n
-            ! The contributions from orders up to the jerk are already included within the current values of pos and vel for a given object before they are updated here,
-            ! so only the contributions from the snap and crackle need to be accounted for here
-            pos(:,i) = pos(:,i) + (recip24 * snp(:,i) * dt4) + (recip120 * crk(:,i) * dt5)
-            vel(:,i) = vel(:,i) + (recip6 * snp(:,i) * dt3) + (recip24 * crk(:,i) * dt4)
-        END DO
-
-        ! Time incrementation
-        t = t + dt
-        tcount = tcount + dt
-        
-        ! Calculating the next timestep length. This will be done every timestep, so the first timestep will have two timestep length calculations (one to calculate
-        ! its own timestep length, and one to calculate the length of timestep 2), while all other timesteps will involve one timestep length calculation (to calculate
-        ! the length of the next timestep)
-        DO i=1,n
-            amag2 = 0._dp ! amag2, jmag2, smag2 and cmag2 all need to be reset to zero for each i
-            jmag2 = 0._dp
-            smag2 = 0._dp
-            cmag2 = 0._dp
-            DO k=1,ndims
-                amag2 = amag2 + (acc(k,i)**2)
-                jmag2 = jmag2 + (jrk(k,i)**2)
-                smag2 = smag2 + (snp(k,i)**2)
-                cmag2 = cmag2 + (crk(k,i)**2)
-            END DO
-            dtOpt(i) = eta * (SQRT(amag2 * smag2) + jmag2) ! Splitting this calculation over multiple lines to make it easier to read
-            dtOpt(i) = dtOpt(i) / (SQRT(jmag2 * cmag2) + smag2)
-            dtOpt(i) = SQRT(dtOpt(i))
-        END DO
-        dt = MINVAL(dtOpt)
-        dt2 = dt**2
-        dt3 = dt**3
-        dt4 = dt**4
-        dt5 = dt**5
-        recipdt2 = 1._dp/dt2
-        recipdt3 = 1._dp/dt3
-
-        ! Checking energy error (this should be done every timestep because the code should stop running if the energy error gets too large)
-        ! The outputs from before the energy error exceeds the limit are fine to keep, but anything after the energy error exceeds the limit should be discarded
-        ! so time is saved by just ending the simulation if the energy error exceeds the limit. Data will be written to the files for the timestep in which the energy
-        ! error becomes too large because it could be useful to see if the outputs give some insight as to why the energy error became so large (especially if it is sudden)
-        Ek = 0._dp ! Needs to be reset to zero in every timestep
-        Ep = 0._dp ! Needs to be reset to zero in every timestep
-
-        DO i=1,n
-            vmag2 = 0._dp
-            DO k=1,ndims
-                vmag2 = vmag2 + (vel(k,i)**2)
-            END DO
-            Ek = Ek + (0.5_dp * m(i) * vmag2)
-        END DO
-
-        DO i=1,n-1
-            DO j=i+1,n ! These boundaries avoid double-counting pairs of objects
-                dist2 = 0._dp ! Need to reset to zero for each new j
-                DO k=1,ndims
-                    dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
-                END DO
-                dist = SQRT(dist2)
-                Ep = Ep - ((m(i) * m(j)) / dist)
-
-                ! Checking for a close encounter - this fits nicely into the energy calculation as it would also ideally avoid double-counting pairs of objects
-                IF (dist <= closeThreshold) THEN
-                    IF (encounters(i,j)==0) THEN
-                        encounters(i,j) = 1
-                        WRITE(17,*) i, j, dist, t*tunit
-                    END IF
-            
-                ELSE
-                    IF (encounters(i,j)==1) THEN
-                        encounters(i,j) = 0
-                        WRITE(17,*) i, j, dist, t*tunit ! This is technically after the encounter ends but it feels easier to code it this way. I may change it in the future
-                    END IF
-                END IF
-            
-            END DO
-        END DO
-        
-        E = Ek + Ep
-        Eerr = ABS((E-E0)/E0)
 
         IF (Eerr >= EerrLim) THEN ! Stop the code if the energy error is too large. This takes priority over the regular file write conditions that depend on either
                                   ! the simulated time elapsed since the beginning of the simulation (file write if t>=tlim, then end the simulation) or on the 
@@ -682,6 +622,43 @@ SUBROUTINE setup_fig_eight(pos, vel, m)
     RETURN
 
 END SUBROUTINE setup_fig_eight
+
+SUBROUTINE closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt, timestepPower)
+    IMPLICIT NONE
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
+    INTEGER :: i
+    INTEGER, INTENT(IN) :: maxPower, dtAllowedMultipliers(1:(1 + (2 * maxPower)))
+    INTEGER, INTENT(OUT) :: timestepPower
+    REAL(dp), INTENT(IN) :: dtBase, dtOpt
+    REAL(dp) :: dtRatio
+
+    dtRatio = dtOpt / dtBase
+
+    IF (dtRatio < dtAllowedMultipliers(1)) THEN
+        timestepPower = -1 * maxPower
+    ELSE IF (dtRatio > dtAllowedMultipliers(1 + (2 * maxPower))) THEN
+        timestepPower = maxPower
+    ELSE
+        ! The following assumes that dtAllowedMultipliers is sorted in ascending order (which it should be)
+        DO i=2,(1 + (2 * maxPower)) ! Start from i=2 because the case for i=1 has already been checked earlier in the IF statement
+            IF (dtRatio < dtAllowedMultipliers(i)) THEN
+                timestepPower = dtAllowedMultipliers(i-1) ! Rounding down to the nearest allowed multiplier
+                EXIT
+            END IF
+        END DO
+    END IF
+
+    RETURN
+    
+END SUBROUTINE closest_timestep
+
+
+
+
+
+
+
+
 
 ! Pseudo-random number generator (NOT MY OWN CODE)
 DOUBLE PRECISION FUNCTION RAN3(IDUM)                                   
