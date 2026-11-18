@@ -271,7 +271,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 dist3 = dist**3
                 dist5 = dist**5
                 acc(:,i) = acc(:,i) - ((m(j) * dr(:)) / dist3)
-                jrk(:,i) = jrk(:,i) + (m(j) * ((dv(:) / dist3) - ((3. * vdotr * dr(:)) / dist5)))
+                jrk(:,i) = jrk(:,i) + (m(j) * ((dv(:) / dist3) - ((3._dp * vdotr * dr(:)) / dist5)))
             END DO
         END DO
 
@@ -326,7 +326,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 dist3 = dist**3
                 dist5 = dist**5
                 accPred(:,i) = accPred(:,i) - ((m(j) * dr(:)) / dist3)
-                jrkPred(:,i) = jrkPred(:,i) + (m(j) * ((dv(:) / dist3) - ((3. * vdotr * dr(:)) / dist5)))
+                jrkPred(:,i) = jrkPred(:,i) + (m(j) * ((dv(:) / dist3) - ((3._dp * vdotr * dr(:)) / dist5)))
             END DO
         END DO
 
