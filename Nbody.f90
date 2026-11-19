@@ -122,7 +122,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     recip120 = 1._dp/120._dp
 
     ! Adjustable values
-    tLim = 1.e2_dp / tunit
+    tLim = 2.e1_dp / tunit
     tWrite = 1.e-1_dp / tunit
     eta = 1.e-6_dp
     EerrLim = 1.e-5_dp
@@ -596,6 +596,37 @@ SUBROUTINE n_body_conversion(munit, runit, tunit, vunit)
     
 END SUBROUTINE n_body_conversion
 
+! Samples a Maschberger IMF (NOT MY CODE)
+SUBROUTINE maschberger(n, seed, m)
+    IMPLICIT NONE
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
+    INTEGER, INTENT(IN) :: n, seed
+    REAL(dp), INTENT(OUT) :: m(1:n)
+    INTEGER :: i
+    REAL(dp) :: alpha, beta, mu, mlo, mup, gmup, gmlo, mmm
+    DOUBLE PRECISION :: ran3, pl3
+
+    alpha = 2.3_dp
+    beta = 1.4_dp
+    mu = 0.2_dp
+    mlo = 0.1_dp
+    mup = 2._dp
+    gmup = (1._dp + ((mup/mu)**(1._dp-alpha)))**(1._dp-beta)
+    gmlo = (1._dp + ((mlo/mu)**(1._dp-alpha)))**(1._dp-beta)
+
+    DO i=1,n
+        pl3 = ran3(seed)
+        mmm = (pl3 * (gmup-gmlo)) + gmlo
+        mmm = mmm**(1._dp/(1._dp-beta))
+        mmm = mmm - 1._dp
+        mmm = mmm**(1._dp/(1._dp-alpha))
+        m(i) = mmm*mu
+    END DO
+    
+    RETURN
+
+END SUBROUTINE maschberger
+
 ! Plummer sphere (3 dimensions only). Method from Aarseth, Hénon and Wielen (1974)
 SUBROUTINE setup_plummer(n, pos, vel, m)
     IMPLICIT NONE
@@ -623,7 +654,8 @@ SUBROUTINE setup_plummer(n, pos, vel, m)
     gq = 0._dp                  ! g(q) = q^2 - (1-q^2)^7/2
     root2 = SQRT(2._dp)         ! Square root of 2
 
-    m = 1._dp ! All objects will be 1 solar mass (for now)
+    CALL maschberger(n, seed, m(:)) ! Assigning masses according to a Maschberger IMF
+
     DO i=1,n
         ranNum = ran3(seed)
         rad = SQRT(1._dp/((ranNum**(-1._dp*twothirds)) - 1._dp))
