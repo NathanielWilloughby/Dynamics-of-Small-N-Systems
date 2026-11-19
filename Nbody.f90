@@ -35,7 +35,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
     REAL(dp), INTENT(IN) :: tunit, vunit
-    INTEGER :: i, j, k, count, encounters(1:n, 1:n), maxPower, timestepMultipliers(1:n), sync
+    INTEGER :: i, j, k, timestepNum, encounters(1:n, 1:n), maxPower, timestepMultipliers(1:n), sync, numPossibleTimestepLengths
     REAL(dp) :: dtBase, t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     REAL(dp) :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, jmag2, smag2, cmag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     REAL(dp) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n), endPos(1:ndims, 1:n), endVel(1:ndims, 1:n)
@@ -52,12 +52,13 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! i - iteration variable used when looping over all objects
     ! j - iteration variable used when looping over pairs of objects
     ! k - iteration variable used when looping over dimensions
-    ! count - debug variable that tracks the current timestep number
+    ! timestepNum - tracks the current timestep number, used for handling multi-particle timesteps and for debugging
     ! encounters - 2D array in which every entry corresponds to a pair of objects. Stores a 1 if these objects are currently in a close encounter, stores a zero otherwise
     ! Note that around half of the encounters array is redundant as it will be symmetrical, but I am leaving it as an n x n array for ease of coding
     ! maxPower - Limit on how many powers of 2 the timestep length can cover
     ! timestepMultipliers - timestep length for object i is 2^timesteps(i) * dtBase. Ranges from -maxPower to +maxPower
     ! sync - number of timesteps between times when ALL possible timestep lengths will be synchronised (will be equal to (2^maxPower)^2)
+    ! numPossibleTimestepLengths - number of allowed timestep lengths, will be equal to 1 + (2*maxPower)
     ! dtBase - base (default) timestep length
     ! t - current simulation time
     ! tcount - time since previous file write (not exactly, since file writes are followed by tcount = tcount - tWrite rather than tcount = 0.)
@@ -123,12 +124,6 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     OPEN(17, file='close_encounters.txt', status='replace') ! Format of this will be "object i, object j, distance, time)
 
 
-
-    ! Constants:
-    recip6 = 1._dp/6._dp
-    recip24 = 1._dp/24._dp
-    recip120 = 1._dp/120._dp
-
     ! Adjustable values
     tLim = 1.e2_dp / tunit
     tWrite = 1.e-1_dp / tunit
@@ -139,9 +134,16 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     dtBase = 1.e-7_dp ! This value is going to be hardcoded for now, but I may make it able to change based on the initial conditions at some point
     maxPower = 6
 
+    ! Constants
+    recip6 = 1._dp/6._dp
+    recip24 = 1._dp/24._dp
+    recip120 = 1._dp/120._dp
+    numPossibleTimestepLengths = 1 + (2 * maxPower)
+    sync = (2 ** maxPower) ** 2
+
 
     ! Setting up dtAllowedMultipliers
-    ALLOCATE(dtAllowedMultipliers(1:(1 + (2 * maxPower))))
+    ALLOCATE(dtAllowedMultipliers(1:numPossibleTimestepLengths))
     DO i=(-1 * maxPower),maxPower
         dtAllowedMultipliers(i+maxPower+1) = 2 ** i ! i+maxPower+1 should convert to the correct position in the dtAllowed array
     END DO
@@ -267,7 +269,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! All objects will initially have the same timestep length
     timestepMultipliers = 0
 
-    count = 0 ! Set to zero before the first timestep, but increase by 1 at the start of every timestep
+    timestepNum = 0 ! Set to zero before the first timestep, but increase by 1 at the start of every timestep
     ! Main loop
 
     ! Calculating initial optimal timestep lengths based on the accelerations, jerks, snaps and crackles of each object after one base timestep has elapsed
@@ -357,13 +359,17 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         dtOpt(i) = eta * (SQRT(amag2 * smag2) + jmag2)
         dtOpt(i) = dtOpt(i) / (SQRT(jmag2 * cmag2) + smag2)
         dtOpt(i) = SQRT(dtOpt(i))
-        CALL closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt(i), timestepMultipliers(i))
+        CALL closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt(i), timestepMultipliers(i), numPossibleTimestepLengths)
     END DO
 
     ! TODO: REWRITE THE MAIN LOOP ACCOUNTING FOR MULTI-PARTICLE TIMESTEPS
 
+    ! The following code assumes this is the case at the start of the first timestep
+    endPos(:,:) = pos(:,:)
+    endVel(:,:) = vel(:,:)
+
     DO
-        count = count + 1 ! Tracking the current timestep number
+        timestepNum = timestepNum + 1 ! Tracking the current timestep number
 
         acc = 0._dp ! Needs to be reset to zero for each new timestep
         jrk = 0._dp ! Needs to be reset to zero for each new timestep
@@ -623,11 +629,12 @@ SUBROUTINE setup_fig_eight(pos, vel, m)
 
 END SUBROUTINE setup_fig_eight
 
-SUBROUTINE closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt, timestepPower)
+SUBROUTINE closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt, timestepPower, numPossibleTimestepLengths)
     IMPLICIT NONE
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER :: i
-    INTEGER, INTENT(IN) :: maxPower, dtAllowedMultipliers(1:(1 + (2 * maxPower)))
+    INTEGER, INTENT(IN) :: numPossibleTimestepLengths
+    INTEGER, INTENT(IN) :: maxPower, dtAllowedMultipliers(1:numPossibleTimestepLengths)
     INTEGER, INTENT(OUT) :: timestepPower
     REAL(dp), INTENT(IN) :: dtBase, dtOpt
     REAL(dp) :: dtRatio
@@ -636,11 +643,11 @@ SUBROUTINE closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt, times
 
     IF (dtRatio < dtAllowedMultipliers(1)) THEN
         timestepPower = -1 * maxPower
-    ELSE IF (dtRatio > dtAllowedMultipliers(1 + (2 * maxPower))) THEN
+    ELSE IF (dtRatio > dtAllowedMultipliers(numPossibleTimestepLengths)) THEN
         timestepPower = maxPower
     ELSE
         ! The following assumes that dtAllowedMultipliers is sorted in ascending order (which it should be)
-        DO i=2,(1 + (2 * maxPower)) ! Start from i=2 because the case for i=1 has already been checked earlier in the IF statement
+        DO i=2,numPossibleTimestepLengths ! Start from i=2 because the case for i=1 has already been checked earlier in the IF statement
             IF (dtRatio < dtAllowedMultipliers(i)) THEN
                 timestepPower = dtAllowedMultipliers(i-1) ! Rounding down to the nearest allowed multiplier
                 EXIT
