@@ -36,11 +36,11 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
     REAL(dp), INTENT(IN) :: tunit, vunit
     INTEGER :: i, j, k, count, encounters(1:n, 1:n)
-    REAL(dp) :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
-    REAL(dp) :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, jmag2, smag2, cmag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
-    REAL(dp):: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
+    REAL(dp) :: t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim, Ebin, Lbin2
+    REAL(dp) :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, jmag2, smag2, cmag2, vdotr, rcrossv(1:ndims), mTot, m(1:n), comPos(1:ndims)
+    REAL(dp) :: comVel(1:ndims), pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
     REAL(dp) :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist, closeThreshold
-    REAL(dp) :: desiredVirRat, virRat
+    REAL(dp) :: desiredVirRat, virRat, ecc, period, sma(1:2), mbin, twopi, threehalves
 
     ! Variable definitions:
     ! n - number of objects
@@ -69,6 +69,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! Ep - potential energy
     ! Eerr - fractional difference between total energy and initial total energy
     ! EerrLim - maximum allowed value of Eerr
+    ! Ebin - total energy of a given encounter. If this is less than zero then the encounter is a binary system
+    ! Lbin2 - total angular momentum squared of a given binary system or parabolic encounter
     ! dist, dist2, dist3, dist5 - distance between two objects and various powers of it (note that dist4 is absent because it is not needed)
     ! dist2 also stores the distance from the origin squared at times
     ! dr - displacement vector between two objects (pos_i - pos_j)
@@ -79,6 +81,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! smag2 - snap magnitude squared (snp . snp)
     ! cmag2 - crackle magnitude squared (crk . crk)
     ! vdotr - dv . dr
+    ! rcrossv - dr x dv
     ! mTot - total mass of all objects
     ! m - mass of each object
     ! comPos - centre of mass
@@ -97,8 +100,14 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! closest - array that stores the distance to the nearest other object and the ID of that object (which is just the index of that object in the pos array)
     ! closestDist - keeps track of the distance to the nearest other object out of those checked so far
     ! closeThreshold - maximum distance between two objects for something to be considered a "close encounter"
-    ! desiredVirRat - Desired virial ratio - may make this a parameter for this subroutine in the future
-    ! virRat - Actual virial ratio (at t=0 before the velocities are scaled to make the actual virial ratio equal to the desired virial ratio)
+    ! desiredVirRat - desired virial ratio - may make this a parameter for this subroutine in the future
+    ! virRat - actual virial ratio (at t=0 before the velocities are scaled to make the actual virial ratio equal to the desired virial ratio)
+    ! ecc - eccentricity of a given binary system or parabolic encounter
+    ! period - period of a given binary system or parabolic encounter (in which case it will be set to zero to easily identify it in the output files)
+    ! sma - semi-major axis of each of the components of a given binary system or parabolic close encounter (in which case they will be set to zero)
+    ! mbin - total mass of a given encounter, binary or otherwise
+    ! twopi - 2 * pi
+    ! threehalves - 3/2
 
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
@@ -112,7 +121,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     OPEN(14, file='velocity_magnitudes.txt', status='replace')
     OPEN(15, file='closest_objects.txt', status='replace')
     OPEN(16, file='energy_error.txt', status='replace')
-    OPEN(17, file='close_encounters.txt', status='replace') ! Format of this will be "object i, object j, distance, time)
+    OPEN(17, file='close_encounters.txt', status='replace') ! Format of this will be "object i, object j, distance, time"
+    OPEN(18, file='binary_properties.txt', status='replace') ! Format of this will be "object i, object j, eccentricity, semi-major axes of the components, period, time"
 
 
 
@@ -120,6 +130,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     recip6 = 1._dp/6._dp
     recip24 = 1._dp/24._dp
     recip120 = 1._dp/120._dp
+    twopi = 8._dp * ATAN(1._dp)
+    threehalves = 3._dp/2._dp
 
     ! Adjustable values
     tLim = 2.e1_dp / tunit
@@ -225,6 +237,66 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 closest(1,i) = j ! Index of the current closest object to object i
                 closest(2,i) = dist
                 closestDist = dist ! The closest distance to object i should now be dist
+            END IF
+        END DO
+    END DO
+
+    ! Checking for binaries and generating some file outputs if the binary is bound (total energy of binary is negative)
+    DO i=1,n-1
+        DO j=i+1,n
+            IF (encounters(i,j)==1) THEN
+                Ebin = 0._dp
+                mbin = m(i) + m(j)
+
+                ! Contribution to binary energy by KE of object i
+                vmag2 = 0._dp
+                DO k=1,ndims
+                    vmag2 = vmag2 + (vel(k,i)**2)
+                END DO
+                Ebin = Ebin + (0.5 * m(i) * vmag2)
+
+                ! Contribution to binary energy by KE of object j
+                vmag2 = 0._dp
+                DO k=1,ndims
+                    vmag2 = vmag2 + (vel(k,j)**2)
+                END DO
+                Ebin = Ebin + (0.5 * m(j) * vmag2)
+
+                ! Contribution to binary energy by GPE
+                dist2 = 0._dp
+                DO k=1,ndims
+                    dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                END DO
+                dist = SQRT(dist2)
+                Ebin = Ebin - ((m(i) * m(j)) / dist)
+
+                IF (Ebin <= 0._dp) THEN
+                    ! System is either a parabolic encounter (E=0), or is a bound binary (E<0)
+                    dr(:) = pos(:,i) - pos(:,j) ! Needed for angular momentum
+                    dv(:) = vel(:,i) - vel(:,j) ! Needed for angular momentum
+
+                    rcrossv(1) = (dr(2) * dv(3)) - (dr(3) * dv(2))
+                    rcrossv(2) = (dr(3) * dv(1)) - (dr(1) * dv(3))
+                    rcrossv(3) = (dr(1) * dv(2)) - (dr(2) * dv(1))
+
+                    Lbin2 = 0._dp
+                    DO k=1,ndims
+                        Lbin2 = Lbin2 + (((m(i) * m(j) * rcrossv(k)) / mbin)**2)
+                    END DO
+                    ecc = SQRT(1._dp + ((2._dp * mbin * Lbin2 * Ebin) / ((m(i)**3) * (m(j)**3))))
+                    IF (Ebin == 0._dp) THEN
+                        ! Setting orbital parameters to zero to make them obvious in the output files
+                        sma(1) = 0._dp 
+                        sma(2) = sma(1)
+                        period = sma(1)
+                    ELSE
+                        sma(1) = -1._dp * ((m(i) * (m(j)**2)) / (2._dp * mbin * Ebin))
+                        sma(2) = -1._dp * (((m(i)**2) * m(j)) / (2._dp * mbin * Ebin))
+                        period = (twopi / SQRT(mbin)) * ((-1._dp * ((m(i) * m(j)) / (2._dp * Ebin)))**threehalves)
+                    END IF
+
+                    WRITE(18,*) i, j, ecc, sma(1), sma(2), period*tunit, t*tunit
+                END IF
             END IF
         END DO
     END DO
@@ -465,6 +537,66 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 END DO
             END DO
 
+            ! Checking for binaries and generating some file outputs if the binary is bound (total energy of binary is negative)
+            DO i=1,n-1
+                DO j=i+1,n
+                    IF (encounters(i,j)==1) THEN
+                        Ebin = 0._dp
+                        mbin = m(i) + m(j)
+
+                        ! Contribution to binary energy by KE of object i
+                        vmag2 = 0._dp
+                        DO k=1,ndims
+                            vmag2 = vmag2 + (vel(k,i)**2)
+                        END DO
+                        Ebin = Ebin + (0.5 * m(i) * vmag2)
+
+                        ! Contribution to binary energy by KE of object j
+                        vmag2 = 0._dp
+                        DO k=1,ndims
+                            vmag2 = vmag2 + (vel(k,j)**2)
+                        END DO
+                        Ebin = Ebin + (0.5 * m(j) * vmag2)
+
+                        ! Contribution to binary energy by GPE
+                        dist2 = 0._dp
+                        DO k=1,ndims
+                            dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                        END DO
+                        dist = SQRT(dist2)
+                        Ebin = Ebin - ((m(i) * m(j)) / dist)
+
+                        IF (Ebin <= 0._dp) THEN
+                            ! System is either a parabolic encounter (E=0), or is a bound binary (E<0)
+                            dr(:) = pos(:,i) - pos(:,j) ! Needed for angular momentum
+                            dv(:) = vel(:,i) - vel(:,j) ! Needed for angular momentum
+
+                            rcrossv(1) = (dr(2) * dv(3)) - (dr(3) * dv(2))
+                            rcrossv(2) = (dr(3) * dv(1)) - (dr(1) * dv(3))
+                            rcrossv(3) = (dr(1) * dv(2)) - (dr(2) * dv(1))
+
+                            Lbin2 = 0._dp
+                            DO k=1,ndims
+                                Lbin2 = Lbin2 + (((m(i) * m(j) * rcrossv(k)) / mbin)**2)
+                            END DO
+                            ecc = SQRT(1._dp + ((2._dp * mbin * Lbin2 * Ebin) / ((m(i)**3) * (m(j)**3))))
+                            IF (Ebin == 0._dp) THEN
+                                ! Setting orbital parameters to zero to make them obvious in the output files
+                                sma(1) = 0._dp
+                                sma(2) = sma(1)
+                                period = sma(1)
+                            ELSE
+                                sma(1) = -1._dp * ((m(i) * (m(j)**2)) / (2._dp * mbin * Ebin))
+                                sma(2) = -1._dp * (((m(i)**2) * m(j)) / (2._dp * mbin * Ebin))
+                                period = (twopi / SQRT(mbin)) * ((-1._dp * ((m(i) * m(j)) / (2._dp * Ebin)))**threehalves)
+                            END IF
+
+                            WRITE(18,*) i, j, ecc, sma(1), sma(2), period*tunit, t*tunit
+                        END IF
+                    END IF
+                END DO
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -511,6 +643,66 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 END DO
             END DO
 
+            ! Checking for binaries and generating some file outputs if the binary is bound (total energy of binary is negative)
+            DO i=1,n-1
+                DO j=i+1,n
+                    IF (encounters(i,j)==1) THEN
+                        Ebin = 0._dp
+                        mbin = m(i) + m(j)
+
+                        ! Contribution to binary energy by KE of object i
+                        vmag2 = 0._dp
+                        DO k=1,ndims
+                            vmag2 = vmag2 + (vel(k,i)**2)
+                        END DO
+                        Ebin = Ebin + (0.5 * m(i) * vmag2)
+
+                        ! Contribution to binary energy by KE of object j
+                        vmag2 = 0._dp
+                        DO k=1,ndims
+                            vmag2 = vmag2 + (vel(k,j)**2)
+                        END DO
+                        Ebin = Ebin + (0.5 * m(j) * vmag2)
+
+                        ! Contribution to binary energy by GPE
+                        dist2 = 0._dp
+                        DO k=1,ndims
+                            dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                        END DO
+                        dist = SQRT(dist2)
+                        Ebin = Ebin - ((m(i) * m(j)) / dist)
+
+                        IF (Ebin <= 0._dp) THEN
+                            ! System is either a parabolic encounter (E=0), or is a bound binary (E<0)
+                            dr(:) = pos(:,i) - pos(:,j) ! Needed for angular momentum
+                            dv(:) = vel(:,i) - vel(:,j) ! Needed for angular momentum
+
+                            rcrossv(1) = (dr(2) * dv(3)) - (dr(3) * dv(2))
+                            rcrossv(2) = (dr(3) * dv(1)) - (dr(1) * dv(3))
+                            rcrossv(3) = (dr(1) * dv(2)) - (dr(2) * dv(1))
+
+                            Lbin2 = 0._dp
+                            DO k=1,ndims
+                                Lbin2 = Lbin2 + (((m(i) * m(j) * rcrossv(k)) / mbin)**2)
+                            END DO
+                            ecc = SQRT(1._dp + ((2._dp * mbin * Lbin2 * Ebin) / ((m(i)**3) * (m(j)**3))))
+                            IF (Ebin == 0._dp) THEN
+                                ! Setting orbital parameters to zero to make them obvious in the output files
+                                sma(1) = 0._dp 
+                                sma(2) = sma(1) 
+                                period = sma(1)
+                            ELSE
+                                sma(1) = -1._dp * ((m(i) * (m(j)**2)) / (2._dp * mbin * Ebin))
+                                sma(2) = -1._dp * (((m(i)**2) * m(j)) / (2._dp * mbin * Ebin))
+                                period = (twopi / SQRT(mbin)) * ((-1._dp * ((m(i) * m(j)) / (2._dp * Ebin)))**threehalves)
+                            END IF
+
+                            WRITE(18,*) i, j, ecc, sma(1), sma(2), period*tunit, t*tunit
+                        END IF
+                    END IF
+                END DO
+            END DO
+
             ! FILE WRITES
             WRITE(7,*) pos(1,:)
             WRITE(8,*) pos(2,:)
@@ -552,6 +744,66 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                         closest(1,i) = j ! Index of the current closest object to object i
                         closest(2,i) = dist
                         closestDist = dist ! The closest distance to object i should now be dist
+                    END IF
+                END DO
+            END DO
+
+            ! Checking for binaries and generating some file outputs if the binary is bound (total energy of binary is negative)
+            DO i=1,n-1
+                DO j=i+1,n
+                    IF (encounters(i,j)==1) THEN
+                        Ebin = 0._dp
+                        mbin = m(i) + m(j)
+
+                        ! Contribution to binary energy by KE of object i
+                        vmag2 = 0._dp
+                        DO k=1,ndims
+                            vmag2 = vmag2 + (vel(k,i)**2)
+                        END DO
+                        Ebin = Ebin + (0.5 * m(i) * vmag2)
+
+                        ! Contribution to binary energy by KE of object j
+                        vmag2 = 0._dp
+                        DO k=1,ndims
+                            vmag2 = vmag2 + (vel(k,j)**2)
+                        END DO
+                        Ebin = Ebin + (0.5 * m(j) * vmag2)
+
+                        ! Contribution to binary energy by GPE
+                        dist2 = 0._dp
+                        DO k=1,ndims
+                            dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
+                        END DO
+                        dist = SQRT(dist2)
+                        Ebin = Ebin - ((m(i) * m(j)) / dist)
+
+                        IF (Ebin <= 0._dp) THEN
+                            ! System is either a parabolic encounter (E=0), or is a bound binary (E<0)
+                            dr(:) = pos(:,i) - pos(:,j) ! Needed for angular momentum
+                            dv(:) = vel(:,i) - vel(:,j) ! Needed for angular momentum
+
+                            rcrossv(1) = (dr(2) * dv(3)) - (dr(3) * dv(2))
+                            rcrossv(2) = (dr(3) * dv(1)) - (dr(1) * dv(3))
+                            rcrossv(3) = (dr(1) * dv(2)) - (dr(2) * dv(1))
+
+                            Lbin2 = 0._dp
+                            DO k=1,ndims
+                                Lbin2 = Lbin2 + (((m(i) * m(j) * rcrossv(k)) / mbin)**2)
+                            END DO
+                            ecc = SQRT(1._dp + ((2._dp * mbin * Lbin2 * Ebin) / ((m(i)**3) * (m(j)**3))))
+                            IF (Ebin == 0._dp) THEN
+                                ! Setting orbital parameters to zero to make them obvious in the output files
+                                sma(1) = 0._dp
+                                sma(2) = sma(1)
+                                period = sma(1)
+                            ELSE
+                                sma(1) = -1._dp * ((m(i) * (m(j)**2)) / (2._dp * mbin * Ebin))
+                                sma(2) = -1._dp * (((m(i)**2) * m(j)) / (2._dp * mbin * Ebin))
+                                period = (twopi / SQRT(mbin)) * ((-1._dp * ((m(i) * m(j)) / (2._dp * Ebin)))**threehalves)
+                            END IF
+
+                            WRITE(18,*) i, j, ecc, sma(1), sma(2), period*tunit, t*tunit
+                        END IF
                     END IF
                 END DO
             END DO
@@ -654,8 +906,9 @@ SUBROUTINE setup_plummer(n, pos, vel, m)
     gq = 0._dp                  ! g(q) = q^2 - (1-q^2)^7/2
     root2 = SQRT(2._dp)         ! Square root of 2
 
-    CALL maschberger(n, seed, m(:)) ! Assigning masses according to a Maschberger IMF
+    !CALL maschberger(n, seed, m(:)) ! Assigning masses according to a Maschberger IMF
 
+    m(:) = 1._dp
     DO i=1,n
         ranNum = ran3(seed)
         rad = SQRT(1._dp/((ranNum**(-1._dp*twothirds)) - 1._dp))
