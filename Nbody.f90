@@ -56,7 +56,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! encounters - 2D array in which every entry corresponds to a pair of objects. Stores a 1 if these objects are currently in a close encounter, stores a zero otherwise
     ! Note that around half of the encounters array is redundant as it will be symmetrical, but I am leaving it as an n x n array for ease of coding
     ! maxPower - Limit on how many powers of 2 the timestep length can cover
-    ! timestepMultipliers - timestep length for object i is 2^timesteps(i) * dtBase. Ranges from -maxPower to +maxPower
+    ! timestepMultipliers - timestep length for object i is 2^timestepMultipliers(i) * dtBase. Ranges from -maxPower to +maxPower
     ! sync - number of timesteps between times when ALL possible timestep lengths will be synchronised (will be equal to (2^maxPower)^2)
     ! numPossibleTimestepLengths - number of allowed timestep lengths, will be equal to 1 + (2*maxPower)
     ! dtBase - base (default) timestep length
@@ -376,7 +376,6 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         ! Other variables also need to be reset to zero, but this will occur later in the timestep when those variables are actually needed
 
 
-
         IF (Eerr >= EerrLim) THEN ! Stop the code if the energy error is too large. This takes priority over the regular file write conditions that depend on either
                                   ! the simulated time elapsed since the beginning of the simulation (file write if t>=tlim, then end the simulation) or on the 
                                   ! file write interval being reached (file write if tcount>=tWrite, then subtract tWrite from tcount)
@@ -523,6 +522,162 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     
 END SUBROUTINE n_body_simulation
 
+! Subroutine that performs a single timestep of a given length for some or all of the objects
+SUBROUTINE timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, dt, dtBase, doThisObject, timestepMultipliers)
+    IMPLICIT NONE
+    INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
+    INTEGER, INTENT(IN) :: n, ndims, timestepMultipliers(1:n)
+    LOGICAL, INTENT(IN) :: doThisObject(1:n)
+    REAL(dp), INTENT(INOUT) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
+    REAL(dp), INTENT(INOUT) :: endPos(1:ndims, 1:n), endVel(1:ndims, 1:n)
+    REAL(dp), INTENT(IN) :: dt, dtBase, m(1:n)
+    INTEGER :: i, j, k
+    REAL(dp) :: interPos(1:ndims, 1:n), interVel(1:ndims, 1:n), dtFrac, dr(1:ndims), dv(1:ndims), dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120
+    REAL(dp) :: vdotr, dist, dist2, dist3, dist5, accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n)
+
+    dt2 = dt**2
+    dt3 = dt**3
+    dt4 = dt**4
+    dt5 = dt**5
+    recipdt2 = 1._dp / dt2
+    recipdt3 = 1._dp / dt3
+    recip6 = 1._dp/6._dp
+    recip24 = 1._dp/24._dp
+    recip120 = 1._dp/120._dp
+
+    DO i=1,n ! Interpolation of positions and velocities - needs to be done BEFORE the rest of the subroutine (other than setting the values of constants)
+        ! First order approximation - assuming constant velocity throughout a long timestep when interpolating positions, and assuming constant acceleration when
+        ! interpolating velocities. Neither of these are true in reality
+        IF (doThisObject(i) .eqv. .true.) THEN
+            ! These objects dont need to have their positions or velocities interpolated
+            interPos(:,i) = pos(:,i)
+            interVel(:,i) = vel(:,i)
+        ELSE
+            IF ((dtBase * (2**timestepMultipliers(i))) < dt) THEN
+                ! Short-timestep objects - no need to interpolate anything as the current timestep does not begin during one of their timesteps
+                ! Just set interPos and interVel to pos and vel respectively. Due to the timestep lengths being handled in descending order, these objects will not
+                ! have had their positions updated yet and so pos and vel store the start-of-timestep positions and velocities
+                interPos(:,i) = pos(:,i)
+                interVel(:,i) = vel(:,i)
+            ELSE
+                ! Long-timestep objects, need to interpolate
+                ! This currently is not done correctly - need to account for the distance through the longer timesteps that this timestep actually starts at
+                dtFrac = dt / (dtBase * (2**timestepMultipliers(i)))
+                dr(:) = endPos(:,i) - pos(:,i) ! Here dr and dv are the end-of-timestep values minus the start-of-timestep values, rather than the difference between
+                                               ! the values for a pair of objects
+                dv(:) = endVel(:,i) - vel(:,i)
+                interPos(:,i) = pos(:,i) + (dr(:) * dtFrac)
+                interVel(:,i) = vel(:,i) + (dv(:) * dtFrac)
+            END IF
+        END IF
+    END DO
+            
+    DO i=1,n
+        IF (doThisObject(i) .eqv. .true.) THEN ! Only calculate new derivatives of the motion for certain objects
+            acc(:,i) = 0._dp
+            jrk(:,i) = 0._dp
+            
+            DO j=1,n
+                IF (i==j) CYCLE
+                dist2 = 0._dp
+                vdotr = 0._dp
+                dr(:) = interPos(:,i) - interPos(:,j)
+                dv(:) = interVel(:,i) - interVel(:,j)
+                DO k=1,ndims
+                    vdotr = vdotr + (dv(k) * dr(k))
+                    dist2 = dist2 + (dr(k)**2)
+                END DO
+                dist = SQRT(dist2)
+                dist3 = dist**3
+                dist5 = dist**5
+                acc(:,i) = acc(:,i) - ((m(j) * dr(:)) / dist3)
+                jrk(:,i) = jrk(:,i) + (m(j) * ((dv(:) / dist3) - ((3._dp * vdotr * dr(:)) / dist5)))
+            END DO
+        END IF
+    END DO
+
+    ! Predicted end-of-timestep positions and velocities (before snap and crackle are accounted for)
+    ! Note that the predicted positions and velocities do NOT need to be in separate arrays to the pre-timestep positions and celocities, as the
+    ! pre-timestep positions and velocities are not needed for the remainder of the timestep after the predicted positions and velocities have been calculated
+    DO i=1,n
+        IF (doThisObject(i) .eqv. .true.) THEN
+            interPos(:,i) = interPos(:,i) + (interVel(:,i) * dt) + (0.5_dp * acc(:,i) * dt2) + (recip6 * jrk(:,i) * dt3)
+            interVel(:,i) = interVel(:,i) + (acc(:,i) * dt) + (0.5_dp * jrk(:,i) * dt2) ! Velocity MUST be updated AFTER position, as updating the position requires the
+                                                                                        ! pre-timestep velocity
+        END IF
+    END DO
+
+    ! Need to re-interpolate to get end-of-timestep positions and velocities for the other objects
+
+
+    ! Predicted accelerations and jerks at the predicted positions and velocities
+    DO i=1,n
+        IF (doThisObject(i) .eqv. .true.) THEN
+            accPred(:,i) = 0._dp
+            jrkPred(:,i) = 0._dp
+            
+            DO j=1,n
+                IF (i==j) CYCLE
+                dist2 = 0._dp
+                vdotr = 0._dp
+                dr(:) = interPos(:,i) - interPos(:,j)
+                dv(:) = interVel(:,i) - interVel(:,j)
+                DO k=1,ndims
+                    vdotr = vdotr + (dv(k) * dr(k))
+                    dist2 = dist2 + (dr(k)**2)
+                END DO
+                dist = SQRT(dist2)
+                dist3 = dist**3
+                dist5 = dist**5
+                accPred(:,i) = accPred(:,i) - ((m(j) * dr(:)) / dist3)
+                jrkPred(:,i) = jrkPred(:,i) + (m(j) * ((dv(:) / dist3) - ((3._dp * vdotr * dr(:)) / dist5)))
+            END DO
+        END IF
+    END DO
+
+    ! Snaps and crackles
+    DO i=1,n
+        IF (doThisObject(i) .eqv. .true.) THEN
+            snp(:,i) = 0._dp
+            crk(:,i) = 0._dp
+            
+            DO j=1,n
+                IF (i==j) CYCLE
+
+                ! No idea if the dt's (and powers of dt) in the following 2 lines need to be the dt for that specific object or if I can juse use the value of dt
+                ! for the current object(s) being considered - I will ask Simon about this when I next meet with him
+                snp(:,i) = snp(:,i) - (recipdt2 * ((6._dp * (acc(:,j) - accPred(:,j))) + (dt * ((4._dp * jrk(:,j)) + (2._dp * jrkPred(:,j))))))
+                crk(:,i) = crk(:,i) + (recipdt3 * ((12._dp * (acc(:,j) - accPred(:,j))) + (6._dp * dt * (jrk(:,j) + jrkPred(:,j)))))
+            END DO
+        END IF
+    END DO
+
+    ! Position and velocity corrections. This COULD be included in the previous DO loop after cycling through all j's for a given i as the snap/crackle
+    ! calculations in the actual loop do not involve the predicted positions/velocities of the relevant objects (the contributions of the predicted positions/velocities
+    ! are contained within accPred and jrkPred, which were calculated beforehand). Updating the positions and velocities during the same DO loop as
+    ! the snaps and crackles are esimated shouldn't affect the snap and crackle estimations, and won't have any effect on the calculated positions and velocities
+    ! as long as they are updated AFTER cycling through all j's for a given i. I have decided against putting them in the same DO loop
+    ! in order to make the code easier to follow
+    DO i=1,n
+        IF (doThisObject(i) .eqv. .true.) THEN
+            interPos(:,i) = interPos(:,i) + (recip24 * snp(:,i) * dt4) + (recip120 * crk(:,i) * dt5)
+            interVel(:,i) = interVel(:,i) + (recip6 * snp(:,i) * dt3) + (recip24 * crk(:,i) * dt4)
+
+            ! Also setting endPos and endVel to be equal to interPos and interVel respectively for the objects that are having their positions and velocities
+            ! updated on this specific timestep. This allows both the start- and end-of-timestep positions and velocities to be stored for interpolation purposes
+            endPos(:,i) = interPos(:,i)
+            endVel(:,i) = interVel(:,i)
+        END IF
+    END DO
+
+    RETURN
+
+END SUBROUTINE timestep
+
+                
+
+
+    
 ! Gives the N-body velocity unit in km/s and the time unit in Myr
 SUBROUTINE n_body_conversion(munit, runit, tunit, vunit)
     IMPLICIT NONE
