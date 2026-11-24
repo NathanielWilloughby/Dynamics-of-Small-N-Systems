@@ -138,7 +138,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     tWrite = 1.e-1_dp / tunit
     eta = 1.e-6_dp
     EerrLim = 1.e-5_dp
-    closeThreshold = 1.e-3_dp
+    closeThreshold = 1.e-2_dp
     desiredVirRat = 1._dp
 
     ! Set up initial conditions
