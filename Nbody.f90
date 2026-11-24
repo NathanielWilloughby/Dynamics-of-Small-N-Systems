@@ -35,12 +35,13 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
     REAL(dp), INTENT(IN) :: tunit, vunit
-    INTEGER :: i, j, k, timestepNum, encounters(1:n, 1:n), maxPower, timestepMultipliers(1:n), sync, numPossibleTimestepLengths
-    REAL(dp) :: dtBase, t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
+    INTEGER :: i, j, k, timestepNum, encounters(1:n, 1:n), maxPower, timestepMultipliers(1:n), sync, numPossibleTimestepLengths, trialdt
+    REAL(dp) :: dtBase, t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     REAL(dp) :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, jmag2, smag2, cmag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     REAL(dp) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n), endPos(1:ndims, 1:n), endVel(1:ndims, 1:n)
     REAL(dp) :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist, closeThreshold
-    REAL(dp) :: desiredVirRat, virRat
+    REAL(dp) :: desiredVirRat, virRat, timeSinceLast(1:n), reciplog2, dtMin, exponent
+    LOGICAL, ALLOCATABLE, DIMENSION(:,:) :: doThisObject
     INTEGER, ALLOCATABLE, DIMENSION(:) :: dtAllowedMultipliers
 
     ! Variable definitions:
@@ -56,16 +57,17 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! encounters - 2D array in which every entry corresponds to a pair of objects. Stores a 1 if these objects are currently in a close encounter, stores a zero otherwise
     ! Note that around half of the encounters array is redundant as it will be symmetrical, but I am leaving it as an n x n array for ease of coding
     ! maxPower - Limit on how many powers of 2 the timestep length can cover
-    ! timestepMultipliers - timestep length for object i is 2^timestepMultipliers(i) * dtBase. Ranges from -maxPower to +maxPower
+    ! timestepMultipliers - timestep length for object i is timestepMultipliers(i) * dtBase. Ranges from 2^-maxPower to 2^maxPower
     ! sync - number of timesteps between times when ALL possible timestep lengths will be synchronised (will be equal to (2^maxPower)^2)
     ! numPossibleTimestepLengths - number of allowed timestep lengths, will be equal to 1 + (2*maxPower)
+    ! trialdt - temporarily stores the optimal timestep length multiplier for an object whilst checking if a move to a new timestep length is allowed
     ! dtBase - base (default) timestep length
     ! t - current simulation time
     ! tcount - time since previous file write (not exactly, since file writes are followed by tcount = tcount - tWrite rather than tcount = 0.)
     ! tLim - simulation time limit
     ! tWrite - time between successive file writes
     ! dtOpt - optimal timestep lengths for each object
-    ! dt, dt2, dt3, dt4, dt5, recipdt2, recipdt3 - timestep length and various powers of it
+    ! dt, dt2, dt3, recipdt2, recipdt3 - timestep length and various powers of it
     ! recip6 - 1/6
     ! recip24 - 1/24
     ! recip120 - 1/120
@@ -105,9 +107,15 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! closest - array that stores the distance to the nearest other object and the ID of that object (which is just the index of that object in the pos array)
     ! closestDist - keeps track of the distance to the nearest other object out of those checked so far
     ! closeThreshold - maximum distance between two objects for something to be considered a "close encounter"
-    ! desiredVirRat - Desired virial ratio - may make this a parameter for this subroutine in the future
-    ! virRat - Actual virial ratio (at t=0 before the velocities are scaled to make the actual virial ratio equal to the desired virial ratio)
-    ! dtAllowedMultipliers - Allowed timestep length multipliers
+    ! desiredVirRat - desired virial ratio - may make this a parameter for this subroutine in the future
+    ! virRat - actual virial ratio (at t=0 before the velocities are scaled to make the actual virial ratio equal to the desired virial ratio)
+    ! dtAllowedMultipliers - allowed timestep length multipliers
+    ! timeSinceLast - amount of simulated time since each object last had its position and velocity updated
+    ! reciplog2 - 1 / log(2). Here 'log' is the base 10 logarithm. This is used in converting to a base 2 logarithm
+    ! dtMin - minimum possible timestep length - shorthand for dtBase * dtAllowedMultipliers(1)
+    ! exponent - a given timestep multiplier is 2^exponent
+    ! doThisObject - 2D array indicating which objects have each timestep length. A chunk of this array that corresponds to a given timestep length will be passed
+    ! into the timestep subroutine
 
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
@@ -138,15 +146,20 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     recip6 = 1._dp/6._dp
     recip24 = 1._dp/24._dp
     recip120 = 1._dp/120._dp
+    reciplog2 = 1._dp / log(2._dp)
     numPossibleTimestepLengths = 1 + (2 * maxPower)
     sync = (2 ** maxPower) ** 2
 
+    ! Setting up doThisObject
+    ALLOCATE(doThisObject(1:n, 1:numPossibleTimestepLengths))
+    doThisObject = .false. ! All false by default
 
     ! Setting up dtAllowedMultipliers
     ALLOCATE(dtAllowedMultipliers(1:numPossibleTimestepLengths))
     DO i=(-1 * maxPower),maxPower
-        dtAllowedMultipliers(i+maxPower+1) = 2 ** i ! i+maxPower+1 should convert to the correct position in the dtAllowed array
+        dtAllowedMultipliers(i+maxPower+1) = 2 ** i ! i+maxPower+1 should convert to the correct position in the dtAllowedMultipliers array
     END DO
+    dtMin = dtBase * dtAllowedMultipliers(1)
 
 
     ! Set up initial conditions
@@ -262,14 +275,17 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
     WRITE(16,*) Eerr, t*tunit ! Note that Eerr and t*tunit will both be zero here. They are included so that all output files have the same number of lines
 
-    ! t and tcount need to be zero at the start of the simulation
+    ! t, tcount and timeSinceLast need to be zero at the start of the simulation
     t = 0._dp
     tcount = 0._dp
+    timeSinceLast = 0._dp
 
     ! All objects will initially have the same timestep length
     timestepMultipliers = 0
 
-    timestepNum = 0 ! Set to zero before the first timestep, but increase by 1 at the start of every timestep
+    timestepNum = 0 ! Set to zero before the first timestep, but increase by 1 at the end of every shortest-length timestep
+                    ! IMPORTANT: This means that when using timestepNum for debugging, the first timestep has timestepNum = 0
+
     ! Main loop
 
     ! Calculating initial optimal timestep lengths based on the accelerations, jerks, snaps and crackles of each object after one base timestep has elapsed
@@ -369,168 +385,294 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     endVel(:,:) = vel(:,:)
 
     DO
-        timestepNum = timestepNum + 1 ! Tracking the current timestep number
 
         acc = 0._dp ! Needs to be reset to zero for each new timestep
         jrk = 0._dp ! Needs to be reset to zero for each new timestep
         ! Other variables also need to be reset to zero, but this will occur later in the timestep when those variables are actually needed
 
+        ! Subroutine for performing a timestep of a given length for some or all of the objects is
+        ! timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, dt, dtBase, doThisObject, timestepMultipliers, timeSinceLast)
 
-        IF (Eerr >= EerrLim) THEN ! Stop the code if the energy error is too large. This takes priority over the regular file write conditions that depend on either
-                                  ! the simulated time elapsed since the beginning of the simulation (file write if t>=tlim, then end the simulation) or on the 
-                                  ! file write interval being reached (file write if tcount>=tWrite, then subtract tWrite from tcount)
+        ! Filling up doThisObject
+        DO i=1,n
+            exponent = LOG(REAL(timestepMultipliers(i))) * reciplog2 ! Base 2 logarithm of timestepMultipliers(i)
+            doThisObject(i, (INT(exponent) + maxPower + 1)) = .true. ! exponent should be x.0000000, so converting to an integer should be fine
+                                                                     ! Adding maxPower + 1 means that the minimum possible timestep length has a second index of 1
+                                                                     ! in the doThisObject array
+        END DO
 
-            DO i=1,n
-                ! Getting distances from origin and velocity magnitudes
-                dist2 = 0._dp ! Need to reset to zero for each new i
-                vmag2 = 0._dp ! Need to reset to zero for each new i
-                DO k=1,ndims
-                    dist2 = dist2 + (pos(k,i)**2)
-                    vmag2 = vmag2 + (vel(k,i)**2)
-                END DO
-                origDists(i) = SQRT(dist2)
-                vmags(i) = SQRT(vmag2)
-            END DO
-
-            DO i=1,n
-                ! Finding the closest other object to each object
-                closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
+        DO i=1,numPossibleTimestepLengths
+            IF (MODULO(timestepNum, (sync / (2**(i-1)))) == 0) THEN
+                ! The above condition means that a longer timestep of a given length synchronises with the shortest possible timestep length on this timestep
+                ! Objects with the given longer timestep length will have their positions and velocities updated
+                ! Note that the case where i=numPossibleTimestepLengths corresponds to the shortest possible timestep length, and so the condition in the above
+                ! IF statement will always be true
                 DO j=1,n
-                    IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
-                    dist2 = 0._dp ! Reset for each j
-                    DO k=1,ndims
-                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
-                    END DO
-                    dist = SQRT(dist2)
-                    IF (dist<closestDist) THEN
-                        closest(1,i) = j ! Index of the current closest object to object i
-                        closest(2,i) = dist
-                        closestDist = dist ! The closest distance to object i should now be dist
+                    IF (doThisObject(j,(numPossibleTimestepLengths + 1 - i)) .eqv. .true.) THEN
+                        ! numPossibleTimestepLengths + 1 - i means that for i=1, doThisObject(j,i), which corresponds to the longest possible timestep length, will
+                        ! be considered
+
+                        ! endPos and endVel are the arrays that are actually updated by the timestep subroutine. The start-of-timestep values (which will be the values
+                        ! stored in endPos and endVel before they are updated - as the unupdated values are those from the end of the previous timestep)
+                        ! are needed for interpolation of positions and velocities when considering other objects
+                        ! The values in endPos(:,j) and endVel(:,j) before updating are not needed when updating the positions and velocities of object j
+                        pos(:,j) = endPos(:,j)
+                        vel(:,j) = endVel(:,j)
+
+                        timeSinceLast(j) = 0._dp ! Setting this to zero here as the value in timeSinceLast(j) is not needed when object j is having its
+                                                 ! position and velocity updated by the timestep subroutine. Setting to zero here therefore avoids having a
+                                                 ! separate DO loop after calling the timestep subroutine to reset timeSinceLast to zero for the objects that were updated
                     END IF
                 END DO
+                CALL timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, (dtBase * dtAllowedMultipliers(i)), dtBase, &
+                doThisObject(:, (numPossibleTimestepLengths + 1 - i)), timestepMultipliers, timeSinceLast)
+            END IF
+        END DO
+
+        ! Updating timeSinceLast for all objects that aren't on the shortest possible timestep length
+        DO i=1,n
+            IF (doThisObject(i,1) .eqv. .false.) THEN
+                timeSinceLast(i) = timeSinceLast(i) + dtMin
+            END IF
+        END DO
+
+        ! Updating timestep lengths
+        ! NOTE: Objects can only move to a longer timestep length in cases where the timestep length they are moving to synchronises with the one they are currently on
+        ! at the start of the next timestep
+        DO i=1,n
+            amag2 = 0._dp
+            jmag2 = 0._dp
+            smag2 = 0._dp
+            cmag2 = 0._dp
+            DO k=1,ndims
+                amag2 = amag2 + (acc(k,i)**2)
+                jmag2 = jmag2 + (jrk(k,i)**2)
+                smag2 = smag2 + (snp(k,i)**2)
+                cmag2 = cmag2 + (crk(k,i)**2)
+            END DO
+            dtOpt(i) = eta * (SQRT(amag2 * smag2) + jmag2)
+            dtOpt(i) = dtOpt(i) / (SQRT(jmag2 * cmag2) + smag2)
+            dtOpt(i) = SQRT(dtOpt(i))
+            CALL closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt(i), trialdt, numPossibleTimestepLengths)
+
+            IF (trialdt < timestepMultipliers(i)) THEN
+                ! Moving to a shorter timestep is always allowed as they will always synchronise with the current timestep length for a given object
+                timestepMultipliers(i) = trialdt
+            ELSE IF (trialdt > timestepMultipliers(i)) THEN
+                ! Not using an ELSE statement because I don't the following to happen if trialdt==timestepMultipliers(i). When that is the case, no change will be made
+                ! to timestepMultipliers(i) regardless
+
+                ! Moving to a longer timestep is only allowed when the target timestep length synchronises with the current timestep length for that object at the start of
+                ! the next timestep
+                ! Due to the way that the timestep multipliers have been defined (they have consistent multiplication factors between them), if the shortest possible
+                ! timestep length synchronises with the target timestep length, then the current timestep length will also synchronise (this is actually
+                ! the case if any timestep length that is shorter than the current one synchronises with the target timestep length). This means that the code can just
+                ! check whether the target timestep length synchronises with the shortest possible timestep length, preventing me from having to work out how to check
+                ! whether two arbitrary timestep lengths synchronise
+
+                IF (MODULO((timestepNum+1), (trialdt * (2**maxPower))) == 0) THEN
+                    ! The above condition checks whether the target timestep length and the shortest possible timestep length synchronise at the start
+                    ! of the next timestep (hence the timestepNum+1). The number of shortest possible timestep lengths per target timestep length is just
+                    ! the ratio between their multipliers, which is trialdt/2^-maxPower, which is equivalent to trialdt * 2^maxPower
+
+                    ! timestepNum+1 will mean that objects only move up to a longer timestep if the target and current timestep lengths synchronise at the start of
+                    ! the next shortest possible timestep, which is what I want to be the case (this comment is here so that I don't forget about this and panic
+                    ! about it in the future)
+
+                    timestepMultipliers(i) = trialdt
+                END IF
+            END IF
+        END DO
+
+        ! File outputs should only be done when all timestep lengths are synchronised at the start of the next timestep of shortest possible length
+
+        IF (MODULO((timestepNum+1), sync) == 0) THEN
+
+            ! Calculating total energy
+            Ek = 0._dp
+            Ep = 0._dp
+
+            DO i=1,n
+                vmag2 = 0._dp
+                DO k=1,ndims
+                    vmag2 = vmag2 + (endVel(k,i)**2)
+                END DO
+                Ek = Ek + (0.5_dp * m(i) * vmag2)
             END DO
 
-            ! FILE WRITES
-            WRITE(7,*) pos(1,:)
-            WRITE(8,*) pos(2,:)
-            WRITE(9,*) pos(3,:)
-            WRITE(10,*) vel(1,:)*vunit
-            WRITE(11,*) vel(2,:)*vunit
-            WRITE(12,*) vel(3,:)*vunit
-            WRITE(13,*) origDists(:)
-            WRITE(14,*) vmags(:)*vunit
-            WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
-            WRITE(16,*) Eerr, t*tunit
-            EXIT
+            DO i=1,n-1
+                DO j=i+1,n
+                    dist2 = 0._dp
+                    DO k=1,ndims
+                        dist2 = dist2 + ((endPos(k,i) - endPos(k,j))**2)
+                    END DO
+                    dist = SQRT(dist2)
+                    Ep = Ep - ((m(i) * m(j)) / dist)
+
+                    ! Could also check for a close encounter, but not doing so right now
+                END DO
+            END DO
+
+            E = Ek + Ep
+            Eerr = ABS((E-E0)/E0)
+
+            IF (Eerr >= EerrLim) THEN ! Stop the code if the energy error is too large. This takes priority over the regular file write conditions that depend on either
+                                      ! the simulated time elapsed since the beginning of the simulation (file write if t>=tlim, then end the simulation) or on the 
+                                      ! file write interval being reached (file write if tcount>=tWrite, then subtract tWrite from tcount)
+
+                DO i=1,n
+                    ! Getting distances from origin and velocity magnitudes
+                    dist2 = 0._dp ! Need to reset to zero for each new i
+                    vmag2 = 0._dp ! Need to reset to zero for each new i
+                    DO k=1,ndims
+                        dist2 = dist2 + (endPos(k,i)**2)
+                        vmag2 = vmag2 + (endVel(k,i)**2)
+                    END DO
+                    origDists(i) = SQRT(dist2)
+                    vmags(i) = SQRT(vmag2)
+                END DO
+
+                DO i=1,n
+                    ! Finding the closest other object to each object
+                    closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
+                    DO j=1,n
+                        IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
+                        dist2 = 0._dp ! Reset for each j
+                        DO k=1,ndims
+                            dist2 = dist2 + ((endPos(k,i) - endPos(k,j))**2)
+                        END DO
+                        dist = SQRT(dist2)
+                        IF (dist<closestDist) THEN
+                            closest(1,i) = j ! Index of the current closest object to object i
+                            closest(2,i) = dist
+                            closestDist = dist ! The closest distance to object i should now be dist
+                        END IF
+                    END DO
+                END DO
+
+                ! FILE WRITES
+                WRITE(7,*) endPos(1,:)
+                WRITE(8,*) endPos(2,:)
+                WRITE(9,*) endPos(3,:)
+                WRITE(10,*) endVel(1,:)*vunit
+                WRITE(11,*) endVel(2,:)*vunit
+                WRITE(12,*) endVel(3,:)*vunit
+                WRITE(13,*) origDists(:)
+                WRITE(14,*) vmags(:)*vunit
+                WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
+                WRITE(16,*) Eerr, t*tunit
+                EXIT
+            END IF
+
+            IF (t >= tLim) THEN ! This takes priority over the coundition (tcount >= tWrite) in the event that both are satisfied
+
+                DO i=1,n
+                    ! Getting distances from origin and velocity magnitudes
+                    dist2 = 0._dp ! Need to reset to zero for each new i
+                    vmag2 = 0._dp ! Need to reset to zero for each new i
+                    DO k=1,ndims
+                        dist2 = dist2 + (endPos(k,i)**2)
+                        vmag2 = vmag2 + (endVel(k,i)**2)
+                    END DO
+                    origDists(i) = SQRT(dist2)
+                    vmags(i) = SQRT(vmag2)
+                END DO
+
+                DO i=1,n
+                    ! Finding the closest other object to each object
+                    closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
+                    DO j=1,n
+                        IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
+                        dist2 = 0._dp ! Reset for each j
+                        DO k=1,ndims
+                            dist2 = dist2 + ((endPos(k,i) - endPos(k,j))**2)
+                        END DO
+                        dist = SQRT(dist2)
+                        IF (dist<closestDist) THEN
+                            closest(1,i) = j ! Index of the current closest object to object i
+                            closest(2,i) = dist
+                            closestDist = dist ! The closest distance to object i should now be dist
+                        END IF
+                    END DO
+                END DO
+
+                ! FILE WRITES
+                WRITE(7,*) endPos(1,:)
+                WRITE(8,*) endPos(2,:)
+                WRITE(9,*) endPos(3,:)
+                WRITE(10,*) endVel(1,:)*vunit
+                WRITE(11,*) endVel(2,:)*vunit
+                WRITE(12,*) endVel(3,:)*vunit
+                WRITE(13,*) origDists(:)
+                WRITE(14,*) vmags(:)*vunit
+                WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
+                WRITE(16,*) Eerr, t*tunit
+                EXIT
+
+            ELSE IF (tcount >= tWrite) THEN
+
+                DO i=1,n
+                    ! Getting distances from origin and velocity magnitudes
+                    dist2 = 0._dp ! Need to reset to zero for each new i
+                    vmag2 = 0._dp ! Need to reset to zero for each new i
+                    DO k=1,ndims
+                        dist2 = dist2 + (endPos(k,i)**2)
+                        vmag2 = vmag2 + (endVel(k,i)**2)
+                    END DO
+                    origDists(i) = SQRT(dist2)
+                    vmags(i) = SQRT(vmag2)
+                END DO
+
+                DO i=1,n
+                    ! Finding the closest other object to each object
+                    closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
+                    DO j=1,n
+                        IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
+                        dist2 = 0._dp ! Reset for each j
+                        DO k=1,ndims
+                            dist2 = dist2 + ((endPos(k,i) - endPos(k,j))**2)
+                        END DO
+                        dist = SQRT(dist2)
+                        IF (dist<closestDist) THEN
+                            closest(1,i) = j ! Index of the current closest object to object i
+                            closest(2,i) = dist
+                            closestDist = dist ! The closest distance to object i should now be dist
+                        END IF
+                    END DO
+                END DO
+
+                ! FILE WRITES
+                WRITE(7,*) endPos(1,:)
+                WRITE(8,*) endPos(2,:)
+                WRITE(9,*) endPos(3,:)
+                WRITE(10,*) endVel(1,:)*vunit
+                WRITE(11,*) endVel(2,:)*vunit
+                WRITE(12,*) endVel(3,:)*vunit
+                WRITE(13,*) origDists(:)
+                WRITE(14,*) vmags(:)*vunit
+                WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
+                WRITE(16,*) Eerr, t*tunit
+                tcount = tcount - tWrite ! Not just resetting tcount to zero because this could cause the file outputs to drift from the intended times over the course
+                                         ! of the simulation. Subtracting twrite keeps the file outputs at times as close to multiples of twrite as possible
+            END IF
+
         END IF
-
-        IF (t >= tLim) THEN ! This takes priority over the coundition (tcount >= tWrite) in the event that both are satisfied
-
-            DO i=1,n
-                ! Getting distances from origin and velocity magnitudes
-                dist2 = 0._dp ! Need to reset to zero for each new i
-                vmag2 = 0._dp ! Need to reset to zero for each new i
-                DO k=1,ndims
-                    dist2 = dist2 + (pos(k,i)**2)
-                    vmag2 = vmag2 + (vel(k,i)**2)
-                END DO
-                origDists(i) = SQRT(dist2)
-                vmags(i) = SQRT(vmag2)
-            END DO
-
-            DO i=1,n
-                ! Finding the closest other object to each object
-                closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
-                DO j=1,n
-                    IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
-                    dist2 = 0._dp ! Reset for each j
-                    DO k=1,ndims
-                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
-                    END DO
-                    dist = SQRT(dist2)
-                    IF (dist<closestDist) THEN
-                        closest(1,i) = j ! Index of the current closest object to object i
-                        closest(2,i) = dist
-                        closestDist = dist ! The closest distance to object i should now be dist
-                    END IF
-                END DO
-            END DO
-
-            ! FILE WRITES
-            WRITE(7,*) pos(1,:)
-            WRITE(8,*) pos(2,:)
-            WRITE(9,*) pos(3,:)
-            WRITE(10,*) vel(1,:)*vunit
-            WRITE(11,*) vel(2,:)*vunit
-            WRITE(12,*) vel(3,:)*vunit
-            WRITE(13,*) origDists(:)
-            WRITE(14,*) vmags(:)*vunit
-            WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
-            WRITE(16,*) Eerr, t*tunit
-            EXIT
-
-        ELSE IF (tcount >= tWrite) THEN
-
-            DO i=1,n
-                ! Getting distances from origin and velocity magnitudes
-                dist2 = 0._dp ! Need to reset to zero for each new i
-                vmag2 = 0._dp ! Need to reset to zero for each new i
-                DO k=1,ndims
-                    dist2 = dist2 + (pos(k,i)**2)
-                    vmag2 = vmag2 + (vel(k,i)**2)
-                END DO
-                origDists(i) = SQRT(dist2)
-                vmags(i) = SQRT(vmag2)
-            END DO
-
-            DO i=1,n
-                ! Finding the closest other object to each object
-                closestDist = 99999._dp ! Make this arbitrarily large at the start of each loop
-                DO j=1,n
-                    IF (i==j) CYCLE ! Avoids having the closest object to a given object be itself
-                    dist2 = 0._dp ! Reset for each j
-                    DO k=1,ndims
-                        dist2 = dist2 + ((pos(k,i) - pos(k,j))**2)
-                    END DO
-                    dist = SQRT(dist2)
-                    IF (dist<closestDist) THEN
-                        closest(1,i) = j ! Index of the current closest object to object i
-                        closest(2,i) = dist
-                        closestDist = dist ! The closest distance to object i should now be dist
-                    END IF
-                END DO
-            END DO
-
-            ! FILE WRITES
-            WRITE(7,*) pos(1,:)
-            WRITE(8,*) pos(2,:)
-            WRITE(9,*) pos(3,:)
-            WRITE(10,*) vel(1,:)*vunit
-            WRITE(11,*) vel(2,:)*vunit
-            WRITE(12,*) vel(3,:)*vunit
-            WRITE(13,*) origDists(:)
-            WRITE(14,*) vmags(:)*vunit
-            WRITE(15,*) closest(:,:) ! Entries 1, 3, 5, etc in each line are the IDs of the nearest objects. Entries 2, 4, 6, etc are the distances to those objects
-            WRITE(16,*) Eerr, t*tunit
-            tcount = tcount - tWrite ! Not just resetting tcount to zero because this could cause the file outputs to drift from the intended times over the course
-                                     ! of the simulation. Subtracting twrite keeps the file outputs at times as close to multiples of twrite as possible
-        END IF
-         
+    
     END DO
-
+    
     RETURN
     
 END SUBROUTINE n_body_simulation
 
 ! Subroutine that performs a single timestep of a given length for some or all of the objects
-SUBROUTINE timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, dt, dtBase, doThisObject, timestepMultipliers)
+SUBROUTINE timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, dt, dtBase, doThisObject, timestepMultipliers, timeSinceLast)
     IMPLICIT NONE
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER, INTENT(IN) :: n, ndims, timestepMultipliers(1:n)
     LOGICAL, INTENT(IN) :: doThisObject(1:n)
     REAL(dp), INTENT(INOUT) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
     REAL(dp), INTENT(INOUT) :: endPos(1:ndims, 1:n), endVel(1:ndims, 1:n)
-    REAL(dp), INTENT(IN) :: dt, dtBase, m(1:n)
+    REAL(dp), INTENT(IN) :: dt, dtBase, m(1:n), timeSinceLast(1:n)
     INTEGER :: i, j, k
     REAL(dp) :: interPos(1:ndims, 1:n), interVel(1:ndims, 1:n), dtFrac, dr(1:ndims), dv(1:ndims), dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120
     REAL(dp) :: vdotr, dist, dist2, dist3, dist5, accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n)
@@ -553,7 +695,7 @@ SUBROUTINE timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, d
             interPos(:,i) = pos(:,i)
             interVel(:,i) = vel(:,i)
         ELSE
-            IF ((dtBase * (2**timestepMultipliers(i))) < dt) THEN
+            IF ((dtBase * timestepMultipliers(i)) < dt) THEN
                 ! Short-timestep objects - no need to interpolate anything as the current timestep does not begin during one of their timesteps
                 ! Just set interPos and interVel to pos and vel respectively. Due to the timestep lengths being handled in descending order, these objects will not
                 ! have had their positions updated yet and so pos and vel store the start-of-timestep positions and velocities
@@ -561,8 +703,7 @@ SUBROUTINE timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, d
                 interVel(:,i) = vel(:,i)
             ELSE
                 ! Long-timestep objects, need to interpolate
-                ! This currently is not done correctly - need to account for the distance through the longer timesteps that this timestep actually starts at
-                dtFrac = dt / (dtBase * (2**timestepMultipliers(i)))
+                dtFrac = timeSinceLast(i) / (dtBase * timestepMultipliers(i))
                 dr(:) = endPos(:,i) - pos(:,i) ! Here dr and dv are the end-of-timestep values minus the start-of-timestep values, rather than the difference between
                                                ! the values for a pair of objects
                 dv(:) = endVel(:,i) - vel(:,i)
@@ -608,7 +749,22 @@ SUBROUTINE timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, d
     END DO
 
     ! Need to re-interpolate to get end-of-timestep positions and velocities for the other objects
-
+    DO i=1,n
+        ! No need to reassign interPos or interVel for the objects that are actually having their positions and velocities updated this timestep
+        IF (doThisObject(i) .eqv. .false.) THEN
+            IF ((dtBase * timestepMultipliers(i)) < dt) THEN
+                CONTINUE ! THIS IS NOT CORRECT RIGHT NOW, UNSURE HOW I WANT TO APPROACH THIS AT THE MOMENT, WILL DISCUSS WITH SIMON - USING CONTINUE AS A PLACEHOLDER
+                         ! Currently this leaves interPos and interVel unchanged for the short-timestep objects, which is more than likely not correct
+            ELSE
+                dtFrac = (timeSinceLast(i) + dt) / (dtBase * timestepMultipliers(i))
+                dr(:) = endPos(:,i) - pos(:,i)                              
+                dv(:) = endVel(:,i) - vel(:,i)
+                interPos(:,i) = pos(:,i) + (dr(:) * dtFrac) ! It is correct to use pos and vel on the right-hand sides of these two lines because of the way dtFrac has
+                                                            ! been defined
+                interVel(:,i) = vel(:,i) + (dv(:) * dtFrac)
+            END IF
+        END IF
+    END DO
 
     ! Predicted accelerations and jerks at the predicted positions and velocities
     DO i=1,n
@@ -784,27 +940,27 @@ SUBROUTINE setup_fig_eight(pos, vel, m)
 
 END SUBROUTINE setup_fig_eight
 
-SUBROUTINE closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt, timestepPower, numPossibleTimestepLengths)
+SUBROUTINE closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt, timestepMultiplier, numPossibleTimestepLengths)
     IMPLICIT NONE
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER :: i
     INTEGER, INTENT(IN) :: numPossibleTimestepLengths
     INTEGER, INTENT(IN) :: maxPower, dtAllowedMultipliers(1:numPossibleTimestepLengths)
-    INTEGER, INTENT(OUT) :: timestepPower
+    INTEGER, INTENT(OUT) :: timestepMultiplier
     REAL(dp), INTENT(IN) :: dtBase, dtOpt
     REAL(dp) :: dtRatio
 
     dtRatio = dtOpt / dtBase
 
     IF (dtRatio < dtAllowedMultipliers(1)) THEN
-        timestepPower = -1 * maxPower
+        timestepMultiplier = 2 ** (-1 * maxPower)
     ELSE IF (dtRatio > dtAllowedMultipliers(numPossibleTimestepLengths)) THEN
-        timestepPower = maxPower
+        timestepMultiplier = 2 ** maxPower
     ELSE
         ! The following assumes that dtAllowedMultipliers is sorted in ascending order (which it should be)
         DO i=2,numPossibleTimestepLengths ! Start from i=2 because the case for i=1 has already been checked earlier in the IF statement
             IF (dtRatio < dtAllowedMultipliers(i)) THEN
-                timestepPower = dtAllowedMultipliers(i-1) ! Rounding down to the nearest allowed multiplier
+                timestepMultiplier = dtAllowedMultipliers(i-1) ! Rounding down to the nearest allowed multiplier
                 EXIT
             END IF
         END DO
