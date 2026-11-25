@@ -162,7 +162,6 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         dtAllowedMultipliers(i) = 2._dp ** (i - maxPower - 1) ! i-maxPower-1 should convert to the correct exponent
     END DO
     dtMin = dtBase * dtAllowedMultipliers(1)
-    WRITE(6,*) dtAllowedMultipliers
 
 
 
@@ -463,7 +462,6 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             dtOpt(i) = dtOpt(i) / (SQRT(jmag2 * cmag2) + smag2)
             dtOpt(i) = SQRT(dtOpt(i))
             CALL closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt(i), trialdt, numPossibleTimestepLengths)
-            WRITE(6,*) trialdt, dtOpt(i), i
 
             IF (trialdt < timestepMultipliers(i)) THEN
                 ! Moving to a shorter timestep is always allowed as they will always synchronise with the current timestep length for a given object
