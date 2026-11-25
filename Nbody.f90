@@ -35,14 +35,14 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER, INTENT(IN) :: n, ndims, initialConditions
     REAL(dp), INTENT(IN) :: tunit, vunit
-    INTEGER :: i, j, k, timestepNum, encounters(1:n, 1:n), maxPower, timestepMultipliers(1:n), sync, numPossibleTimestepLengths, trialdt
+    INTEGER :: i, j, k, timestepNum, encounters(1:n, 1:n), maxPower, sync, numPossibleTimestepLengths
     REAL(dp) :: dtBase, t, tcount, tLim, tWrite, dtOpt(1:n), dt, dt2, dt3, recipdt2, recipdt3, recip6, recip24, recip120, E, E0, Ek, Ep, Eerr, EerrLim
     REAL(dp) :: dist, dist2, dist3, dist5, dr(1:ndims), dv(1:ndims), vmag2, amag2, jmag2, smag2, cmag2, vdotr, mTot, m(1:n), comPos(1:ndims), comVel(1:ndims)
     REAL(dp) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n), endPos(1:ndims, 1:n), endVel(1:ndims, 1:n)
     REAL(dp) :: accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n), eta, origDists(1:n), vmags(1:n), closest(1:2, 1:n), closestDist, closeThreshold
-    REAL(dp) :: desiredVirRat, virRat, timeSinceLast(1:n), reciplog2, dtMin, exponent
+    REAL(dp) :: desiredVirRat, virRat, timeSinceLast(1:n), reciplog2, dtMin, exponent, timestepMultipliers(1:n), trialdt
     LOGICAL, ALLOCATABLE, DIMENSION(:,:) :: doThisObject
-    INTEGER, ALLOCATABLE, DIMENSION(:) :: dtAllowedMultipliers
+    REAL(dp), ALLOCATABLE, DIMENSION(:) :: dtAllowedMultipliers
 
     ! Variable definitions:
     ! n - number of objects
@@ -57,10 +57,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! encounters - 2D array in which every entry corresponds to a pair of objects. Stores a 1 if these objects are currently in a close encounter, stores a zero otherwise
     ! Note that around half of the encounters array is redundant as it will be symmetrical, but I am leaving it as an n x n array for ease of coding
     ! maxPower - Limit on how many powers of 2 the timestep length can cover
-    ! timestepMultipliers - timestep length for object i is timestepMultipliers(i) * dtBase. Ranges from 2^-maxPower to 2^maxPower
     ! sync - number of timesteps between times when ALL possible timestep lengths will be synchronised (will be equal to (2^maxPower)^2)
     ! numPossibleTimestepLengths - number of allowed timestep lengths, will be equal to 1 + (2*maxPower)
-    ! trialdt - temporarily stores the optimal timestep length multiplier for an object whilst checking if a move to a new timestep length is allowed
     ! dtBase - base (default) timestep length
     ! t - current simulation time
     ! tcount - time since previous file write (not exactly, since file writes are followed by tcount = tcount - tWrite rather than tcount = 0.)
@@ -109,13 +107,15 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ! closeThreshold - maximum distance between two objects for something to be considered a "close encounter"
     ! desiredVirRat - desired virial ratio - may make this a parameter for this subroutine in the future
     ! virRat - actual virial ratio (at t=0 before the velocities are scaled to make the actual virial ratio equal to the desired virial ratio)
-    ! dtAllowedMultipliers - allowed timestep length multipliers
     ! timeSinceLast - amount of simulated time since each object last had its position and velocity updated
     ! reciplog2 - 1 / log(2). Here 'log' is the base 10 logarithm. This is used in converting to a base 2 logarithm
     ! dtMin - minimum possible timestep length - shorthand for dtBase * dtAllowedMultipliers(1)
     ! exponent - a given timestep multiplier is 2^exponent
+    ! timestepMultipliers - timestep length for object i is timestepMultipliers(i) * dtBase. Ranges from 2^-maxPower to 2^maxPower
+    ! trialdt - temporarily stores the optimal timestep length multiplier for an object whilst checking if a move to a new timestep length is allowed
     ! doThisObject - 2D array indicating which objects have each timestep length. A chunk of this array that corresponds to a given timestep length will be passed
     ! into the timestep subroutine
+    ! dtAllowedMultipliers - allowed timestep length multipliers
 
 
     ! Opening the files that will be written to - will sort this out properly later as for now I don't think that what I've done will allow automation
@@ -140,7 +140,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     closeThreshold = 1.e-3_dp
     desiredVirRat = 1._dp
     dtBase = 1.e-7_dp ! This value is going to be hardcoded for now, but I may make it able to change based on the initial conditions at some point
-    maxPower = 6
+    maxPower = 8
 
     ! Constants
     recip6 = 1._dp/6._dp
@@ -150,16 +150,20 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     numPossibleTimestepLengths = 1 + (2 * maxPower)
     sync = (2 ** maxPower) ** 2
 
+
     ! Setting up doThisObject
     ALLOCATE(doThisObject(1:n, 1:numPossibleTimestepLengths))
     doThisObject = .false. ! All false by default
 
+
     ! Setting up dtAllowedMultipliers
     ALLOCATE(dtAllowedMultipliers(1:numPossibleTimestepLengths))
-    DO i=(-1 * maxPower),maxPower
-        dtAllowedMultipliers(i+maxPower+1) = 2 ** i ! i+maxPower+1 should convert to the correct position in the dtAllowedMultipliers array
+    DO i=1,numPossibleTimestepLengths
+        dtAllowedMultipliers(i) = 2._dp ** (i - maxPower - 1) ! i-maxPower-1 should convert to the correct exponent
     END DO
     dtMin = dtBase * dtAllowedMultipliers(1)
+    WRITE(6,*) dtAllowedMultipliers
+
 
 
     ! Set up initial conditions
@@ -168,6 +172,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     ELSE
         CALL setup_plummer(n, pos, vel, m)
     END IF
+
 
     ! Conversion to COM frame
     mTot = 0._dp ! mTot is assumed to be zero before the following code begins to run
@@ -186,6 +191,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         pos(:,i) = pos(:,i) - comPos(:)
         vel(:,i) = vel(:,i) - comVel(:)
     END DO
+
 
     ! Initial total energy
     Ek = 0._dp ! Ek is assumed to be zero before the following code begins to run
@@ -220,6 +226,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     virRat = (2._dp * Ek) / ABS(Ep)
     vel(:,:) = vel(:,:) * SQRT(desiredVirRat / virRat)
 
+
     ! Recalculating kinetic energy
     Ek = 0._dp
     DO i=1,n
@@ -232,6 +239,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
     E0 = Ek + Ep
 
+
     DO i=1,n
         ! Getting distances from origin and velocity magnitudes
         dist2 = 0._dp ! Need to reset to zero for each new i
@@ -243,6 +251,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         origDists(i) = SQRT(dist2)
         vmags(i) = SQRT(vmag2)
     END DO
+
 
     DO i=1,n
         ! Finding the closest other object to each object
@@ -261,6 +270,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             END IF
         END DO
     END DO
+
 
 
     ! Writing initial conditions to files 
@@ -286,7 +296,6 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
     timestepNum = 0 ! Set to zero before the first timestep, but increase by 1 at the end of every shortest-length timestep
                     ! IMPORTANT: This means that when using timestepNum for debugging, the first timestep has timestepNum = 0
 
-    ! Main loop
 
     ! Calculating initial optimal timestep lengths based on the accelerations, jerks, snaps and crackles of each object after one base timestep has elapsed
     ! This is not a "real" timestep, and instead is used to assign initial values to each index in the timesteps array. This should be treated as part of the setup
@@ -378,12 +387,12 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
         CALL closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt(i), timestepMultipliers(i), numPossibleTimestepLengths)
     END DO
 
-    ! TODO: REWRITE THE MAIN LOOP ACCOUNTING FOR MULTI-PARTICLE TIMESTEPS
-
     ! The following code assumes this is the case at the start of the first timestep
     endPos(:,:) = pos(:,:)
     endVel(:,:) = vel(:,:)
 
+
+    ! Main loop
     DO
 
         acc = 0._dp ! Needs to be reset to zero for each new timestep
@@ -454,6 +463,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
             dtOpt(i) = dtOpt(i) / (SQRT(jmag2 * cmag2) + smag2)
             dtOpt(i) = SQRT(dtOpt(i))
             CALL closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt(i), trialdt, numPossibleTimestepLengths)
+            WRITE(6,*) trialdt, dtOpt(i), i
 
             IF (trialdt < timestepMultipliers(i)) THEN
                 ! Moving to a shorter timestep is always allowed as they will always synchronise with the current timestep length for a given object
@@ -470,7 +480,7 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
                 ! check whether the target timestep length synchronises with the shortest possible timestep length, preventing me from having to work out how to check
                 ! whether two arbitrary timestep lengths synchronise
 
-                IF (MODULO((timestepNum+1), (trialdt * (2**maxPower))) == 0) THEN
+                IF (MODULO((timestepNum+1), INT((trialdt * (2**maxPower)))) == 0) THEN
                     ! The above condition checks whether the target timestep length and the shortest possible timestep length synchronise at the start
                     ! of the next timestep (hence the timestepNum+1). The number of shortest possible timestep lengths per target timestep length is just
                     ! the ratio between their multipliers, which is trialdt/2^-maxPower, which is equivalent to trialdt * 2^maxPower
@@ -668,11 +678,11 @@ END SUBROUTINE n_body_simulation
 SUBROUTINE timestep(n, ndims, m, pos, vel, acc, jrk, snp, crk, endPos, endVel, dt, dtBase, doThisObject, timestepMultipliers, timeSinceLast)
     IMPLICIT NONE
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
-    INTEGER, INTENT(IN) :: n, ndims, timestepMultipliers(1:n)
+    INTEGER, INTENT(IN) :: n, ndims
     LOGICAL, INTENT(IN) :: doThisObject(1:n)
     REAL(dp), INTENT(INOUT) :: pos(1:ndims, 1:n), vel(1:ndims, 1:n), acc(1:ndims, 1:n), jrk(1:ndims, 1:n), snp(1:ndims, 1:n), crk(1:ndims, 1:n)
     REAL(dp), INTENT(INOUT) :: endPos(1:ndims, 1:n), endVel(1:ndims, 1:n)
-    REAL(dp), INTENT(IN) :: dt, dtBase, m(1:n), timeSinceLast(1:n)
+    REAL(dp), INTENT(IN) :: dt, dtBase, m(1:n), timeSinceLast(1:n), timestepMultipliers(1:n)
     INTEGER :: i, j, k
     REAL(dp) :: interPos(1:ndims, 1:n), interVel(1:ndims, 1:n), dtFrac, dr(1:ndims), dv(1:ndims), dt2, dt3, dt4, dt5, recipdt2, recipdt3, recip6, recip24, recip120
     REAL(dp) :: vdotr, dist, dist2, dist3, dist5, accPred(1:ndims, 1:n), jrkPred(1:ndims, 1:n)
@@ -945,17 +955,17 @@ SUBROUTINE closest_timestep(maxPower, dtBase, dtAllowedMultipliers, dtOpt, times
     INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15, 307)
     INTEGER :: i
     INTEGER, INTENT(IN) :: numPossibleTimestepLengths
-    INTEGER, INTENT(IN) :: maxPower, dtAllowedMultipliers(1:numPossibleTimestepLengths)
-    INTEGER, INTENT(OUT) :: timestepMultiplier
-    REAL(dp), INTENT(IN) :: dtBase, dtOpt
+    INTEGER, INTENT(IN) :: maxPower
+    REAL(dp), INTENT(IN) :: dtBase, dtOpt, dtAllowedMultipliers(1:numPossibleTimestepLengths)
+    REAL(dp), INTENT(OUT) :: timestepMultiplier
     REAL(dp) :: dtRatio
 
     dtRatio = dtOpt / dtBase
 
     IF (dtRatio < dtAllowedMultipliers(1)) THEN
-        timestepMultiplier = 2 ** (-1 * maxPower)
+        timestepMultiplier = 2._dp ** (-1 * maxPower)
     ELSE IF (dtRatio > dtAllowedMultipliers(numPossibleTimestepLengths)) THEN
-        timestepMultiplier = 2 ** maxPower
+        timestepMultiplier = 2._dp ** maxPower
     ELSE
         ! The following assumes that dtAllowedMultipliers is sorted in ascending order (which it should be)
         DO i=2,numPossibleTimestepLengths ! Start from i=2 because the case for i=1 has already been checked earlier in the IF statement
