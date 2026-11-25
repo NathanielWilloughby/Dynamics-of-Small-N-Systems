@@ -494,6 +494,8 @@ SUBROUTINE n_body_simulation(n, ndims, initialConditions, tunit, vunit)
 
         ! File outputs should only be done when all timestep lengths are synchronised at the start of the next timestep of shortest possible length
 
+        t = t + dtMin ! dtMin is the minimum timestep length. Increasing t by dtMin each time the main DO loop is run through is correct because
+                      ! one run of the main DO loop corresponds to one minimum-length timestep. Longer timesteps will occur on some but not all runs of the main DO loop
         IF (MODULO((timestepNum+1), sync) == 0) THEN
 
             ! Calculating total energy
